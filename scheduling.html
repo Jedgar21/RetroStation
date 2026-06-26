@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}Scheduling{% endblock %}
+{% block nav_sched %}active{% endblock %}
+{% block heading %}Scheduling{% endblock %}
+{% block subhead %}Drag shows, files, or collections onto the timeline, then set how each block plays and its commercials.{% endblock %}
+
+{% block content %}
+<div class="flex gap-2 items-center mb-3 text-xs">
+  <select id="chanSel" class="w-48"></select>
+  <input id="daySel" type="date" class="w-40">
+  <span class="text-dim ml-auto" id="status"></span>
+</div>
+
+<div class="flex gap-3 h-[calc(100vh-200px)]">
+  <!-- library sidebar -->
+  <div class="w-64 shrink-0 card p-3 overflow-y-auto">
+    <div class="text-dim text-[10px] uppercase tracking-widest mb-2">Drag onto timeline</div>
+    <input id="libFilter" placeholder="filter…" class="mb-3 text-xs" oninput="renderLib()">
+    <div id="lib" class="space-y-3 text-xs"></div>
+  </div>
+
+  <!-- timeline -->
+  <div class="flex-1 card overflow-y-auto relative">
+    <div id="timeline"></div>
+  </div>
+</div>
+
+<!-- block config modal -->
+<div id="blockModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50" onclick="closeBlock(event)">
+  <div class="card p-5 w-[520px] max-w-[94vw] max-h-[92vh] overflow-auto" onclick="event.stopPropagation()">
+    <div class="text-sm font-bold mb-1" id="blkTitle">Configure block</div>
+    <div class="text-dim text-[11px] mb-3" id="blkWhen"></div>
+
+    <label>How should it play?</label>
+    <select id="blkRule">
+      <option value="chronological">Chronological (S1E1, S1E2…)</option>
+      <option value="shuffle">Shuffle / Random</option>
+      <option value="specific">A specific episode/file</option>
+    </select>
+    <div id="specificWrap" class="hidden">
+      <label>Which one?</label><select id="blkSpecific"></select>
+    </div>
+
+    <div class="text-glow text-[11px] uppercase tracking-widest mt-4 mb-1">Commercials</div>
+    <label>When do they play?</label>
+    <select id="blkPlace">
+      <option value="none">No commercials</option>
+      <option value="before">Before each program</option>
+      <option value="after">After each program</option>
+      <option value="middle">Middle of each program</option>
+    </select>
+    <div id="adWrap" class="hidden">
+      <div class="grid grid-cols-2 gap-3">
+        <div><label>Source</label>
+          <select id="blkAdSource">
+            <option value="commercial">Commercial pool</option>
+            <option value="collection">A collection</option>
+            <option value="bumper">Bumper pool</option>
+          </select></div>
+        <div><label>Pad for (minutes)</label><input id="blkAdPad" type="number" value="2"></div>
+      </div>
+      <div id="adColWrap" class="hidden"><label>Collection</label><select id="blkAdCol"></select></div>
+    </div>
+
+    <div class="flex justify-end gap-2 mt-5">
+      <button class="btn-ghost" onclick="closeBlock()">Cancel</button>
+      <button class="btn" onclick="saveBlock()">Schedule it</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let CHANNELS=[],GROUPED={groups:{}},COLLECTIONS=[],DRAG=null,DROP=null;
+const ROW=60; // px per hour
+
+async function load(){
+  CHANNELS=await api('/channels');
+  GROUPED=await api('/media/grouped');
+  COLLECTIONS=await api('/collections');
+  $('#daySel').value=new Date().toISOString().slice(0,10);
+  $('#chanSel').innerHTML=CHANNELS.map(c=>`<option value="${c.id}">${c.number} · ${c.name}</option>`).join('')
+    ||'<option>— no channels —</option>';
+  $('#chanSel').onchange=loadSchedule;$('#daySel').onchange=loadSchedule;
+  renderLib();buildTimeline();loadSchedule();
+}
+
+function renderLib(){
+  const f=($('#libFilter').value||'').toLowerCase();const box=$('#lib');box.innerHTML='';
+  // collections
+  if(COLLECTIONS.length){
+    box.innerHTML+='<div class="text-amber text-[10px] uppercase tracking-widest">Collections</div>';
+    COLLECTIONS.filter(c=>c.name.toLowerCase().includes(f)).forEach(c=>{
+      box.appendChild(chip('★ '+c.name, c.count+' items', {kind:'collection',collection_id:c.id}));
+    });
+  }
+  // shows
+  const shows=Object.keys(GROUPED.groups.show||{}).filter(s=>s!=='_singles'&&s.toLowerCase().includes(f));
+  if(shows.length){
+    box.innerHTML+='<div class="text-dim text-[10px] uppercase tracking-widest mt-2">Shows</div>';
+    shows.forEach(s=>box.appendChild(chip(s, (GROUPED.groups.show[s].length)+' eps', {kind:'show',show_title:s})));
+  }
+  // movies + music videos as type pools
+  ['movie','music_video','commercial'].forEach(t=>{
+    const items=Object.values(GROUPED.groups[t]||{}).flat().filter(e=>e.title.toLowerCase().includes(f));
+    if(items.length){
+      box.innerHTML+=`<div class="text-dim text-[10px] uppercase tracking-widest mt-2">${t.replace('_',' ')}</div>`;
+      box.appendChild(chip(t.replace('_',' ')+' pool', items.length+' files', {kind:'type',media_type:t}));
+      items.slice(0,30).forEach(m=>box.appendChild(chip(m.title, fmt(m.duration), {kind:'media',media_id:m.id})));
+    }
+  });
+}
+function chip(title,sub,payload){
+  const el=document.createElement('div');el.draggable=true;
+  el.className='bg-panel2 border border-line rounded px-2 py-1.5 hover:border-glow cursor-grab';
+  el.innerHTML=`<div class="truncate">${title}</div><div class="text-dim text-[10px]">${sub}</div>`;
+  el.ondragstart=()=>DRAG=payload;
+  return el;
+}
+
+function buildTimeline(){
+  const tl=$('#timeline');tl.innerHTML='';tl.style.position='relative';
+  for(let h=0;h<24;h++){
+    const row=document.createElement('div');row.className='flex border-b border-line/40';row.style.height=ROW+'px';
+    row.innerHTML=`<div class="w-14 shrink-0 text-[10px] text-dim px-2 pt-1 border-r border-line/40">${String(h).padStart(2,'0')}:00</div>`;
+    const drop=document.createElement('div');drop.className='flex-1 relative';drop.dataset.hour=h;
+    drop.ondragover=e=>{e.preventDefault();drop.style.background='#16241d';};
+    drop.ondragleave=()=>drop.style.background='';
+    drop.ondrop=e=>{e.preventDefault();drop.style.background='';onDrop(h);};
+    row.appendChild(drop);tl.appendChild(row);
+  }
+}
+
+function onDrop(hour){
+  if(!DRAG)return;
+  const ch=$('#chanSel').value;
+  if(!ch||isNaN(parseInt(ch))){toast('Create a channel first',true);return;}
+  // default block: this hour to end of day (user can refine later)
+  DROP={...DRAG, hour};
+  // populate modal
+  $('#blkWhen').textContent=`From ${String(hour).padStart(2,'0')}:00 to end of day`;
+  $('#blkRule').value='chronological';$('#blkPlace').value='none';
+  togglerule();toggleplace();
+  // specific options
+  let opts=[];
+  if(DRAG.kind==='show')opts=(GROUPED.groups.show[DRAG.show_title]||[]);
+  $('#blkSpecific').innerHTML=opts.map(e=>`<option value="${e.id}">${e.season?('S'+e.season+'E'+e.episode+' '):''}${e.title}</option>`).join('');
+  $('#blkAdCol').innerHTML=COLLECTIONS.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+  $('#blockModal').classList.remove('hidden');
+}
+$('#blkRule')&&0; // noop
+document.addEventListener('change',e=>{
+  if(e.target.id==='blkRule')togglerule();
+  if(e.target.id==='blkPlace')toggleplace();
+  if(e.target.id==='blkAdSource')$('#adColWrap').classList.toggle('hidden',e.target.value!=='collection');
+});
+function togglerule(){$('#specificWrap').classList.toggle('hidden',$('#blkRule').value!=='specific');}
+function toggleplace(){$('#adWrap').classList.toggle('hidden',$('#blkPlace').value==='none');}
+
+async function saveBlock(){
+  const ch=parseInt($('#chanSel').value);
+  const day=$('#daySel').value;
+  const start=new Date(day+'T00:00:00');start.setHours(DROP.hour,0,0,0);
+  const end=new Date(day+'T00:00:00');end.setHours(24,0,0,0);
+  const place=$('#blkPlace').value;
+  const adSource=$('#blkAdSource').value;
+  const body={
+    channel_id:ch,start:start.toISOString(),end:end.toISOString(),
+    rule:$('#blkRule').value,
+    show_title:DROP.show_title||null,collection_id:DROP.collection_id||null,
+    media_id:DROP.media_id||null,media_type:DROP.media_type||null,
+    specific_media_id: $('#blkRule').value==='specific'?parseInt($('#blkSpecific').value):null,
+    commercial_placement:place,
+    commercial_pad_minutes: place!=='none'?parseInt($('#blkAdPad').value||0):0,
+    commercial_collection_id: (place!=='none'&&adSource==='collection')?parseInt($('#blkAdCol').value):null,
+    commercial_media_type: (place!=='none'&&adSource!=='collection')?adSource:null,
+  };
+  try{
+    const r=await api('/blocks','POST',body);
+    toast(`Scheduled ${r.slots} slots`);closeBlock();loadSchedule();
+  }catch(e){toast('Failed: '+e.message,true);}
+  DRAG=null;DROP=null;
+}
+function closeBlock(e){if(e&&e.target.id!=='blockModal'&&e.type==='click'&&e.target!==e.currentTarget)return;$('#blockModal').classList.add('hidden');}
+
+async function loadSchedule(){
+  const ch=$('#chanSel').value;if(!ch||isNaN(parseInt(ch)))return;
+  document.querySelectorAll('.slot-chip').forEach(e=>e.remove());
+  const rows=await api(`/schedule?channel_id=${ch}&day=${$('#daySel').value}`);
+  const tl=$('#timeline');
+  rows.forEach(s=>{
+    const st=new Date(s.start),en=new Date(s.end);
+    const top=(st.getHours()+st.getMinutes()/60)*ROW;
+    const h=Math.max(13,((en-st)/3600000)*ROW-2);
+    const chip=document.createElement('div');
+    chip.className='slot-chip absolute left-14 right-1 rounded px-2 text-[10px] overflow-hidden bg-glow/15 border border-glow/40';
+    chip.style.top=top+'px';chip.style.height=h+'px';
+    chip.innerHTML=`<span class="text-glow">${s.title}</span> <span class="text-dim">${st.toTimeString().slice(0,5)}</span>`;
+    tl.appendChild(chip);
+  });
+}
+function fmt(s){s=Math.round(s||0);const m=Math.floor(s/60);return m?(Math.floor(m/60)?Math.floor(m/60)+'h':'')+(m%60)+'m':s+'s';}
+function status(m){$('#status').textContent=m;setTimeout(()=>$('#status').textContent='',3000);}
+load();
+</script>
+{% endblock %}

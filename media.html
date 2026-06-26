@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block title %}Media{% endblock %}
+{% block nav_media %}active{% endblock %}
+{% block heading %}Media Library{% endblock %}
+{% block subhead %}Imported media grouped by type. Link Plex/Jellyfin to pull in your own categories, and build collections for scheduling.{% endblock %}
+
+{% block content %}
+<div class="flex gap-2 mb-4 flex-wrap text-xs">
+  <button class="btn-ghost tab active" data-t="show" onclick="setTab('show')">Shows</button>
+  <button class="btn-ghost tab" data-t="movie" onclick="setTab('movie')">Movies</button>
+  <button class="btn-ghost tab" data-t="commercial" onclick="setTab('commercial')">Commercials</button>
+  <button class="btn-ghost tab" data-t="music_video" onclick="setTab('music_video')">Music Videos</button>
+  <button class="btn-ghost tab" data-t="other" onclick="setTab('other')">Other</button>
+  <button class="btn-ghost tab" data-t="collections" onclick="setTab('collections')">★ Collections</button>
+  <button class="btn-ghost tab" data-t="sources" onclick="setTab('sources')">🔗 Sources</button>
+  <div class="ml-auto flex gap-2">
+    <button class="btn-ghost" onclick="openScan()">Scan folder</button>
+  </div>
+</div>
+
+<!-- category chips (from Plex/Jellyfin) -->
+<div id="catBar" class="flex gap-2 mb-3 flex-wrap text-[11px]"></div>
+
+<div id="content"></div>
+
+<!-- scan modal -->
+<div id="scanModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50" onclick="closeM('scanModal',event)">
+  <div class="card p-5 w-96" onclick="event.stopPropagation()">
+    <div class="text-sm font-bold mb-3">Scan local folder</div>
+    <label>Folder path (inside container)</label><input id="scanFolder" placeholder="/media/cartoons">
+    <label>Type</label>
+    <select id="scanType"><option value="">auto-detect</option><option value="show">Show</option>
+      <option value="movie">Movie</option><option value="commercial">Commercial</option>
+      <option value="music_video">Music Video</option><option value="other">Other</option></select>
+    <div class="flex justify-end gap-2 mt-4">
+      <button class="btn-ghost" onclick="closeM('scanModal')">Cancel</button>
+      <button class="btn" onclick="doScan()">Scan</button>
+    </div>
+  </div>
+</div>
+
+<!-- collection modal -->
+<div id="colModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50" onclick="closeM('colModal',event)">
+  <div class="card p-5 w-[560px] max-w-[94vw] max-h-[90vh] overflow-auto" onclick="event.stopPropagation()">
+    <div class="text-sm font-bold mb-3">New Collection</div>
+    <label>Name</label><input id="colName" placeholder="Saturday Morning Cartoons">
+    <label>Add whole season</label>
+    <div class="flex gap-2">
+      <select id="colShow" class="flex-1"></select>
+      <input id="colSeason" type="number" placeholder="season #" class="w-28">
+      <button class="btn-ghost" onclick="addSeasonItem()">add</button>
+    </div>
+    <label>Add individual item</label>
+    <div class="flex gap-2">
+      <select id="colItem" class="flex-1"></select>
+      <button class="btn-ghost" onclick="addMediaItem()">add</button>
+    </div>
+    <div id="colItems" class="mt-3 space-y-1 text-xs"></div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button class="btn-ghost" onclick="closeM('colModal')">Cancel</button>
+      <button class="btn" onclick="saveCollection()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- source modal -->
+<div id="srcModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50" onclick="closeM('srcModal',event)">
+  <div class="card p-5 w-96" onclick="event.stopPropagation()">
+    <div class="text-sm font-bold mb-3">Link Plex / Jellyfin</div>
+    <label>Type</label><select id="srcKind"><option value="plex">Plex</option><option value="jellyfin">Jellyfin</option></select>
+    <label>Name</label><input id="srcName" placeholder="home">
+    <label>Server URL</label><input id="srcUrl" placeholder="http://192.168.1.10:32400">
+    <label>Token / API key</label><input id="srcToken" placeholder="X-Plex-Token or Jellyfin API key">
+    <label>Jellyfin user id (Jellyfin only)</label><input id="srcUser" placeholder="optional">
+    <div class="flex justify-end gap-2 mt-4">
+      <button class="btn-ghost" onclick="closeM('srcModal')">Cancel</button>
+      <button class="btn" onclick="saveSource()">Link</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let TAB='show', GROUPED={groups:{},categories:[]}, ACTIVE_CAT=null;
+let COLLECTIONS=[], SOURCES=[], pendingItems=[];
+
+function setTab(t){TAB=t;ACTIVE_CAT=null;document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b.dataset.t===t));render();}
+
+async function load(){
+  GROUPED=await api('/media/grouped');
+  COLLECTIONS=await api('/collections');
+  SOURCES=await api('/sources');
+  render();
+}
+
+function render(){
+  renderCats();
+  const c=$('#content');
+  if(TAB==='collections')return renderCollections(c);
+  if(TAB==='sources')return renderSources(c);
+  const bucket=GROUPED.groups[TAB]||{};
+  let shown=Object.entries(bucket);
+  if(ACTIVE_CAT){
+    shown=shown.map(([k,eps])=>[k,eps.filter(e=>e.category===ACTIVE_CAT)]).filter(([k,eps])=>eps.length);
+  }
+  if(!shown.length){c.innerHTML='<div class="card p-6 text-dim text-center">Nothing here yet.</div>';return;}
+  c.innerHTML='';
+  shown.forEach(([name,eps])=>{
+    const card=document.createElement('div');card.className='card p-4 mb-3';
+    const title=name==='_singles'?'(individual items)':name;
+    card.innerHTML=`<div class="font-bold mb-2">${title} <span class="text-dim text-[11px]">${eps.length}</span></div>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-1 text-[11px] text-dim">
+        ${eps.map(e=>`<div class="truncate">${e.season?('S'+e.season+'E'+e.episode+' '):''}${e.title}</div>`).join('')}
+      </div>`;
+    c.appendChild(card);
+  });
+}
+function renderCats(){
+  const bar=$('#catBar');
+  if((TAB==='collections'||TAB==='sources')||!GROUPED.categories.length){bar.innerHTML='';return;}
+  bar.innerHTML=`<span class="btn-ghost ${!ACTIVE_CAT?'active':''}" onclick="setCat(null)">all</span>`+
+    GROUPED.categories.map(cat=>`<span class="btn-ghost ${ACTIVE_CAT===cat?'active':''}" onclick="setCat('${cat}')">${cat}</span>`).join('');
+}
+function setCat(c){ACTIVE_CAT=c;render();}
+
+// ---- collections ----
+function renderCollections(c){
+  c.innerHTML=`<div class="flex justify-end mb-3"><button class="btn" onclick="openCol()">+ New Collection</button></div>`;
+  if(!COLLECTIONS.length){c.innerHTML+='<div class="card p-6 text-dim text-center">No collections yet. Build one from shows/seasons/files to schedule together.</div>';return;}
+  COLLECTIONS.forEach(col=>{
+    const el=document.createElement('div');el.className='card p-4 mb-2 flex justify-between items-center';
+    el.innerHTML=`<div><div class="font-bold">★ ${col.name}</div><div class="text-dim text-[11px]">${col.count} items</div></div>
+      <button class="btn-danger" onclick="delCol(${col.id})">delete</button>`;
+    c.appendChild(el);
+  });
+}
+function openCol(){
+  pendingItems=[];$('#colName').value='';$('#colItems').innerHTML='';
+  const shows=Object.keys(GROUPED.groups.show||{}).filter(s=>s!=='_singles');
+  $('#colShow').innerHTML=shows.map(s=>`<option>${s}</option>`).join('');
+  const all=[];Object.values(GROUPED.groups).forEach(b=>Object.values(b).forEach(eps=>eps.forEach(e=>all.push(e))));
+  $('#colItem').innerHTML=all.map(e=>`<option value="${e.id}">${e.title}</option>`).join('');
+  $('#colModal').classList.remove('hidden');
+}
+function addSeasonItem(){
+  const show=$('#colShow').value,season=parseInt($('#colSeason').value);
+  if(!show||isNaN(season))return;
+  pendingItems.push({show_title:show,season});renderPending();
+}
+function addMediaItem(){
+  const sel=$('#colItem');const id=parseInt(sel.value);const label=sel.options[sel.selectedIndex].text;
+  pendingItems.push({media_id:id,_label:label});renderPending();
+}
+function renderPending(){
+  $('#colItems').innerHTML=pendingItems.map((it,i)=>
+    `<div class="flex justify-between bg-panel2 border border-line rounded px-2 py-1">
+      <span>${it.media_id?('🎞 '+it._label):('📚 '+it.show_title+' · Season '+it.season)}</span>
+      <button class="text-red" onclick="pendingItems.splice(${i},1);renderPending()">×</button></div>`).join('');
+}
+async function saveCollection(){
+  const name=$('#colName').value;if(!name){toast('Name required',true);return;}
+  await api('/collections','POST',{name,items:pendingItems.map(({_label,...r})=>r)});
+  toast('Collection created');closeM('colModal');load();
+}
+async function delCol(id){if(!confirm('Delete collection?'))return;await api('/collections/'+id,'DELETE');toast('Deleted');load();}
+
+// ---- sources (Plex/Jellyfin) ----
+function renderSources(c){
+  c.innerHTML=`<div class="flex justify-end mb-3"><button class="btn" onclick="$('#srcModal').classList.remove('hidden')">+ Link source</button></div>`;
+  if(!SOURCES.length){c.innerHTML+='<div class="card p-6 text-dim text-center">No Plex/Jellyfin servers linked.</div>';return;}
+  SOURCES.forEach(s=>{
+    const el=document.createElement('div');el.className='card p-4 mb-2';
+    el.innerHTML=`<div class="flex justify-between items-center">
+      <div><div class="font-bold">${s.name} <span class="text-amber text-[10px] uppercase">${s.kind}</span></div>
+        <div class="text-dim text-[11px]">${s.base_url}${s.last_synced?(' · synced '+s.last_synced.slice(0,16).replace('T',' ')):' · never synced'}</div></div>
+      <div class="flex gap-2">
+        <button class="btn-ghost" onclick="syncSrc(${s.id})">Sync now</button>
+        <button class="btn-danger" onclick="delSrc(${s.id})">remove</button></div>
+      </div><div class="text-dim text-[11px] mt-2" id="cat-${s.id}"></div>`;
+    c.appendChild(el);
+    api('/sources/'+s.id+'/categories').then(r=>{
+      $('#cat-'+s.id).innerHTML='Libraries: '+(r.categories||[]).map(c=>`<span class="text-glow">${c.title}</span>`).join(', ');
+    }).catch(()=>{});
+  });
+}
+async function saveSource(){
+  const body={kind:$('#srcKind').value,name:$('#srcName').value,base_url:$('#srcUrl').value,
+    token:$('#srcToken').value,user_id:$('#srcUser').value||null};
+  if(!body.name||!body.base_url||!body.token){toast('Name, URL, token required',true);return;}
+  await api('/sources','POST',body);toast('Linked');closeM('srcModal');load();
+}
+async function syncSrc(id){
+  toast('Syncing… (may take a minute)');
+  try{const r=await api('/sources/'+id+'/sync','POST',{});toast(`Imported ${r.imported} items`);load();}
+  catch(e){toast('Sync failed: '+e.message,true);}
+}
+async function delSrc(id){if(!confirm('Remove source?'))return;await api('/sources/'+id,'DELETE');toast('Removed');load();}
+
+// ---- scan ----
+function openScan(){$('#scanModal').classList.remove('hidden');}
+async function doScan(){
+  const folder=$('#scanFolder').value.trim();if(!folder)return;
+  const media_type=$('#scanType').value||null;
+  toast('Scanning…');
+  const r=await api('/media/scan','POST',{folder,media_type});
+  toast(`Scanned ${r.scanned} files`);closeM('scanModal');load();
+}
+function closeM(id,e){if(e&&e.target.id!==id&&e.type==='click'&&e.target!==e.currentTarget)return;$('#'+id).classList.add('hidden');}
+load();
+</script>
+{% endblock %}

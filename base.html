@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FieldStation · {% block title %}{% endblock %}</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config={theme:{extend:{colors:{
+  ink:'#0b0d12',panel:'#141821',panel2:'#1b2130',line:'#2a3142',
+  glow:'#46e1a0',amber:'#f0b429',dim:'#7a8398',red:'#e5484d'
+}}}};
+</script>
+{% block head %}{% endblock %}
+<style>
+  body{background:#0b0d12;color:#e6e9f0;font-family:ui-monospace,'SF Mono',Menlo,monospace}
+  .nav-link{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:8px;color:#7a8398;font-size:13px;letter-spacing:.5px}
+  .nav-link:hover{background:#1b2130;color:#e6e9f0}
+  .nav-link.active{background:#16241d;color:#46e1a0;border:1px solid #46e1a033}
+  ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#2a3142;border-radius:4px}
+  .btn{background:#46e1a0;color:#0b0d12;font-weight:bold;border-radius:6px;padding:8px 14px;font-size:12px;letter-spacing:.5px}
+  .btn:hover{filter:brightness(1.1)}
+  .btn-ghost{background:transparent;border:1px solid #2a3142;color:#7a8398;border-radius:6px;padding:8px 14px;font-size:12px}
+  .btn-ghost:hover{border-color:#46e1a0;color:#46e1a0}
+  .btn-danger{background:transparent;border:1px solid #e5484d;color:#e5484d;border-radius:6px;padding:8px 14px;font-size:12px}
+  .btn-danger:hover{background:#e5484d;color:#fff}
+  .card{background:#141821;border:1px solid #2a3142;border-radius:10px}
+  input,select,textarea{background:#0b0d12;border:1px solid #2a3142;color:#e6e9f0;border-radius:6px;padding:8px 10px;font-family:inherit;font-size:13px;width:100%}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:#46e1a0}
+  label{display:block;font-size:10px;color:#7a8398;text-transform:uppercase;letter-spacing:1px;margin:10px 0 4px}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1b2130;border:1px solid #46e1a0;padding:10px 18px;border-radius:8px;font-size:13px;opacity:0;transition:.3s;pointer-events:none;z-index:80}
+  .toast.show{opacity:1}.toast.err{border-color:#e5484d}
+</style>
+</head>
+<body class="h-screen overflow-hidden flex">
+  <!-- sidebar -->
+  <aside class="w-56 shrink-0 border-r border-line flex flex-col p-3">
+    <div class="px-2 py-3 mb-3 border-b border-line">
+      <div class="text-glow text-lg font-bold tracking-widest">▚ FIELD<br>STATION</div>
+      <div class="text-dim text-[10px] tracking-wide mt-1">RETRO BROADCAST</div>
+    </div>
+    <nav class="space-y-1 flex-1">
+      <a href="/" class="nav-link {% block nav_channels %}{% endblock %}">📺 Channels</a>
+      <a href="/scheduling" class="nav-link {% block nav_sched %}{% endblock %}">🗓 Scheduling</a>
+      <a href="/media" class="nav-link {% block nav_media %}{% endblock %}">🎞 Media</a>
+      <a href="/ffmpeg" class="nav-link {% block nav_ffmpeg %}{% endblock %}">⚙ FFmpeg</a>
+    </nav>
+    <div class="border-t border-line pt-3 space-y-1">
+      <a href="/playlist.m3u" class="nav-link text-[12px]">⬇ M3U Playlist</a>
+      <a href="/epg.xml" class="nav-link text-[12px]">⬇ EPG XML</a>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <main class="flex-1 overflow-auto">
+    <div class="p-6 max-w-6xl mx-auto">
+      <h1 class="text-xl font-bold tracking-wide mb-1">{% block heading %}{% endblock %}</h1>
+      <p class="text-dim text-xs mb-5">{% block subhead %}{% endblock %}</p>
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  <div class="toast" id="toast"></div>
+  <script>
+    const $=s=>document.querySelector(s);
+    function toast(m,err){const t=$('#toast');t.textContent=m;t.className='toast show'+(err?' err':'');setTimeout(()=>t.className='toast',2800);}
+    async function api(path,method,body){
+      const o={method:method||'GET',headers:{'Content-Type':'application/json'}};
+      if(body)o.body=JSON.stringify(body);
+      const r=await fetch('/api'+path,o);const j=await r.json().catch(()=>({}));
+      if(!r.ok||j.ok===false)throw new Error(j.error||('HTTP '+r.status));
+      return j;
+    }
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Channels{% endblock %}
+{% block nav_channels %}active{% endblock %}
+{% block heading %}Channels{% endblock %}
+{% block subhead %}Your virtual stations. Preview a live channel or edit its settings.{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="flex justify-end mb-4">
+  <button class="btn" onclick="openEdit()">+ New Channel</button>
+</div>
+<div id="channelGrid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+
+<!-- preview modal -->
+<div id="previewModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50" onclick="closePreview(event)">
+  <div class="card p-3 w-[640px] max-w-[92vw]" onclick="event.stopPropagation()">
+    <div class="flex justify-between items-center mb-2">
+      <span id="previewTitle" class="text-glow text-sm"></span>
+      <button class="btn-ghost" onclick="closePreview()">close</button>
+    </div>
+    <video id="previewVideo" controls autoplay class="w-full bg-black rounded aspect-video"></video>
+    <div class="text-dim text-[11px] mt-2">Live channel feed (MPEG-TS via mpegts.js). First frames take a few seconds while ffmpeg spins up.</div>
+  </div>
+</div>
+
+<!-- edit modal -->
+<div id="editModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50" onclick="closeEdit(event)">
+  <div class="card p-5 w-[520px] max-w-[94vw] max-h-[90vh] overflow-auto" onclick="event.stopPropagation()">
+    <div class="text-sm font-bold mb-3" id="editTitle">New Channel</div>
+    <input type="hidden" id="edId">
+    <div class="grid grid-cols-2 gap-3">
+      <div><label>Channel number</label><input id="edNumber" placeholder="2.1"></div>
+      <div><label>Name</label><input id="edName" placeholder="CARTOON TV"></div>
+    </div>
+    <label>Logo URL</label><input id="edLogo" placeholder="https://… or /static/logo.png">
+    <label>FFmpeg profile</label><select id="edProfile"></select>
+    <div class="grid grid-cols-2 gap-3">
+      <div><label>Preferred audio language</label>
+        <input id="edLang" placeholder="eng, jpn, spa… (ISO 639-2)"></div>
+      <div><label>Subtitle language (to burn)</label>
+        <input id="edSubLang" placeholder="eng (optional)"></div>
+    </div>
+    <label class="flex items-center gap-2 mt-3 normal-case tracking-normal text-[13px] text-dim">
+      <input type="checkbox" id="edBurnSubs" class="w-auto accent-glow"> Burn subtitles into the video
+    </label>
+    <div class="flex justify-between mt-5">
+      <button class="btn-danger" id="edDelete" onclick="deleteChannel()">Delete</button>
+      <div class="flex gap-2">
+        <button class="btn-ghost" onclick="closeEdit()">Cancel</button>
+        <button class="btn" onclick="saveChannel()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let CHANNELS=[], PROFILES=[], player=null;
+
+async function load(){
+  PROFILES=await api('/profiles');
+  CHANNELS=await api('/channels');
+  renderGrid();
+}
+function profName(id){const p=PROFILES.find(p=>p.id===id);return p?p.name:'—';}
+
+function renderGrid(){
+  const g=$('#channelGrid');
+  if(!CHANNELS.length){g.innerHTML='<div class="card p-6 text-dim col-span-2 text-center">No channels yet. Create one to start broadcasting.</div>';return;}
+  g.innerHTML='';
+  CHANNELS.forEach(c=>{
+    const el=document.createElement('div');el.className='card p-4 flex gap-4 items-center';
+    el.innerHTML=`
+      <div class="w-16 h-16 rounded bg-panel2 border border-line flex items-center justify-center overflow-hidden shrink-0">
+        ${c.logo_url?`<img src="${c.logo_url}" class="w-full h-full object-contain">`:`<span class="text-glow font-bold">${c.number}</span>`}
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="font-bold truncate">${c.name} <span class="text-dim text-xs">${c.number}</span></div>
+        <div class="text-dim text-[11px]">${profName(c.profile_id)}
+          ${c.preferred_language?(' · '+c.preferred_language):''}
+          ${c.burn_subtitles?' · subs':''}</div>
+      </div>
+      <div class="flex gap-2">
+        <button class="btn" onclick="preview('${c.number}','${c.name}')">▶ Preview</button>
+        <button class="btn-ghost" onclick='editChannel(${JSON.stringify(c)})'>Edit</button>
+      </div>`;
+    g.appendChild(el);
+  });
+}
+
+// ---- live preview via mpegts.js ----
+function preview(number,name){
+  $('#previewModal').classList.remove('hidden');
+  $('#previewTitle').textContent='CH '+number+' · '+name;
+  const video=$('#previewVideo');
+  if(player){player.destroy();player=null;}
+  if(mpegts.getFeatureList().mseLivePlayback){
+    player=mpegts.createPlayer({type:'mpegts',isLive:true,url:'/preview/'+number+'.ts'});
+    player.attachMediaElement(video);player.load();player.play();
+  } else {
+    toast('Live TS playback not supported in this browser',true);
+  }
+}
+function closePreview(e){
+  if(e&&e.target.id!=='previewModal'&&e.type==='click'&&e.target!==e.currentTarget)return;
+  $('#previewModal').classList.add('hidden');
+  const v=$('#previewVideo');v.pause();
+  if(player){player.destroy();player=null;}
+}
+
+// ---- edit ----
+function openEdit(){
+  $('#editTitle').textContent='New Channel';$('#edId').value='';
+  ['edNumber','edName','edLogo','edLang','edSubLang'].forEach(i=>$('#'+i).value='');
+  $('#edBurnSubs').checked=false;$('#edDelete').style.display='none';
+  fillProfiles(null);$('#editModal').classList.remove('hidden');
+}
+function editChannel(c){
+  $('#editTitle').textContent='Edit '+c.name;
+  $('#edId').value=c.id;$('#edNumber').value=c.number;$('#edName').value=c.name;
+  $('#edLogo').value=c.logo_url||'';$('#edLang').value=c.preferred_language||'';
+  $('#edSubLang').value=c.subtitle_language||'';$('#edBurnSubs').checked=!!c.burn_subtitles;
+  fillProfiles(c.profile_id);$('#edDelete').style.display='block';
+  $('#editModal').classList.remove('hidden');
+}
+function fillProfiles(sel){
+  $('#edProfile').innerHTML=PROFILES.map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${p.name}</option>`).join('');
+}
+function closeEdit(e){
+  if(e&&e.target.id!=='editModal'&&e.type==='click'&&e.target!==e.currentTarget)return;
+  $('#editModal').classList.add('hidden');
+}
+async function saveChannel(){
+  const id=$('#edId').value;
+  const body={name:$('#edName').value,number:$('#edNumber').value,
+    logo_url:$('#edLogo').value||null,profile_id:parseInt($('#edProfile').value)||null,
+    preferred_language:$('#edLang').value||null,subtitle_language:$('#edSubLang').value||null,
+    burn_subtitles:$('#edBurnSubs').checked};
+  if(!body.name||!body.number){toast('Name and number required',true);return;}
+  try{
+    if(id)await api('/channels/'+id,'PUT',body); else await api('/channels','POST',body);
+    toast('Saved');closeEdit();load();
+  }catch(e){toast('Save failed: '+e.message,true);}
+}
+async function deleteChannel(){
+  const id=$('#edId').value;if(!id)return;
+  if(!confirm('Delete this channel?'))return;
+  await api('/channels/'+id,'DELETE');toast('Deleted');closeEdit();load();
+}
+load();
+</script>
+{% endblock %}

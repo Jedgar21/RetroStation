@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}FFmpeg Profiles{% endblock %}
+{% block nav_ffmpeg %}active{% endblock %}
+{% block heading %}FFmpeg Profiles{% endblock %}
+{% block subhead %}Transcode presets you assign to channels — resolution, codecs, normalization, and hardware acceleration.{% endblock %}
+
+{% block content %}
+<div class="flex justify-end mb-4">
+  <button class="btn" onclick="openEdit()">+ New Profile</button>
+</div>
+<div id="profileList" class="space-y-3"></div>
+
+<div id="editModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50" onclick="closeEdit(event)">
+  <div class="card p-5 w-[640px] max-w-[94vw] max-h-[92vh] overflow-auto" onclick="event.stopPropagation()">
+    <div class="text-sm font-bold mb-3" id="editTitle">New Profile</div>
+    <input type="hidden" id="pId">
+    <label>Profile name</label><input id="pName" placeholder="720p · NVENC · 16:9">
+
+    <div class="text-glow text-[11px] uppercase tracking-widest mt-4 mb-1">Video</div>
+    <div class="grid grid-cols-3 gap-3">
+      <div><label>Resolution</label>
+        <select id="pRes"><option>1920x1080</option><option selected>1280x720</option>
+          <option>854x480</option><option>640x480</option></select></div>
+      <div><label>Aspect ratio</label>
+        <select id="pAspect"><option>16:9</option><option>4:3</option></select></div>
+      <div><label>FPS</label><input id="pFps" type="number" value="30"></div>
+    </div>
+    <div class="grid grid-cols-3 gap-3">
+      <div><label>Video bitrate</label><input id="pVBitrate" value="3500k"></div>
+      <div><label>Video buffer size</label><input id="pVBuf" value="7000k"></div>
+      <div><label>GOP (seconds)</label><input id="pGop" type="number" value="2"></div>
+    </div>
+    <label class="flex items-center gap-2 mt-2 normal-case tracking-normal text-[13px] text-dim">
+      <input type="checkbox" id="pVNorm" class="w-auto accent-glow"> Video normalization (levels)</label>
+
+    <div class="text-glow text-[11px] uppercase tracking-widest mt-4 mb-1">Audio</div>
+    <div class="grid grid-cols-3 gap-3">
+      <div><label>Audio codec</label>
+        <select id="pACodec"><option>aac</option><option>ac3</option><option>mp2</option></select></div>
+      <div><label>Audio bitrate</label><input id="pABitrate" value="128k"></div>
+      <div><label>Audio buffer size</label><input id="pABuf" value="256k"></div>
+    </div>
+    <div class="grid grid-cols-3 gap-3">
+      <div><label>Channels</label>
+        <select id="pAChan"><option value="2" selected>2 (stereo)</option>
+          <option value="1">1 (mono)</option><option value="6">6 (5.1)</option></select></div>
+      <div><label>Sample rate</label>
+        <select id="pASample"><option value="48000" selected>48000</option>
+          <option value="44100">44100</option><option value="32000">32000</option></select></div>
+      <div class="flex items-end pb-1">
+        <label class="flex items-center gap-2 normal-case tracking-normal text-[13px] text-dim">
+          <input type="checkbox" id="pANorm" class="w-auto accent-glow"> Loudness norm (R128)</label></div>
+    </div>
+
+    <div class="text-glow text-[11px] uppercase tracking-widest mt-4 mb-1">Hardware acceleration</div>
+    <div class="grid grid-cols-2 gap-3">
+      <div><label>Encoder</label>
+        <select id="pHw"><option value="none">none (software libx264)</option>
+          <option value="vaapi">VAAPI (Intel/AMD)</option>
+          <option value="qsv">QuickSync (Intel)</option>
+          <option value="nvenc">NVENC (NVIDIA)</option></select></div>
+      <div><label>HW device (VAAPI/QSV)</label><input id="pHwDev" value="/dev/dri/renderD128"></div>
+    </div>
+
+    <div class="flex justify-between mt-5">
+      <button class="btn-danger" id="pDelete" onclick="deleteProfile()">Delete</button>
+      <div class="flex gap-2">
+        <button class="btn-ghost" onclick="closeEdit()">Cancel</button>
+        <button class="btn" onclick="saveProfile()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let PROFILES=[];
+async function load(){PROFILES=await api('/profiles');render();}
+function render(){
+  const l=$('#profileList');
+  if(!PROFILES.length){l.innerHTML='<div class="card p-6 text-dim text-center">No profiles yet.</div>';return;}
+  l.innerHTML='';
+  PROFILES.forEach(p=>{
+    const el=document.createElement('div');el.className='card p-4 flex justify-between items-center';
+    const hw=p.hwaccel==='none'?'software':p.hwaccel.toUpperCase();
+    el.innerHTML=`<div>
+      <div class="font-bold">${p.name}</div>
+      <div class="text-dim text-[11px]">${p.resolution} · ${p.aspect_ratio} · ${p.fps}fps · ${p.video_bitrate} ·
+        ${p.audio_codec} ${p.audio_bitrate}/${p.audio_sample_rate}Hz/${p.audio_channels}ch ·
+        <span class="text-amber">${hw}</span>
+        ${p.audio_normalize?' · R128':''}${p.video_normalize?' · vnorm':''}</div></div>
+      <button class="btn-ghost" onclick='editProfile(${JSON.stringify(p)})'>Edit</button>`;
+    l.appendChild(el);
+  });
+}
+function g(id){return $('#'+id);}
+function openEdit(){
+  $('#editTitle').textContent='New Profile';g('pId').value='';
+  g('pName').value='';g('pRes').value='1280x720';g('pAspect').value='16:9';g('pFps').value=30;
+  g('pVBitrate').value='3500k';g('pVBuf').value='7000k';g('pGop').value=2;g('pVNorm').checked=false;
+  g('pACodec').value='aac';g('pABitrate').value='128k';g('pABuf').value='256k';
+  g('pAChan').value='2';g('pASample').value='48000';g('pANorm').checked=false;
+  g('pHw').value='none';g('pHwDev').value='/dev/dri/renderD128';
+  g('pDelete').style.display='none';$('#editModal').classList.remove('hidden');
+}
+function editProfile(p){
+  $('#editTitle').textContent='Edit '+p.name;g('pId').value=p.id;
+  g('pName').value=p.name;g('pRes').value=p.resolution;g('pAspect').value=p.aspect_ratio;g('pFps').value=p.fps;
+  g('pVBitrate').value=p.video_bitrate;g('pVBuf').value=p.video_bufsize;g('pGop').value=p.gop_seconds;g('pVNorm').checked=p.video_normalize;
+  g('pACodec').value=p.audio_codec;g('pABitrate').value=p.audio_bitrate;g('pABuf').value=p.audio_bufsize;
+  g('pAChan').value=p.audio_channels;g('pASample').value=p.audio_sample_rate;g('pANorm').checked=p.audio_normalize;
+  g('pHw').value=p.hwaccel;g('pHwDev').value=p.hwaccel_device||'';
+  g('pDelete').style.display='block';$('#editModal').classList.remove('hidden');
+}
+function closeEdit(e){if(e&&e.target.id!=='editModal'&&e.type==='click'&&e.target!==e.currentTarget)return;$('#editModal').classList.add('hidden');}
+function body(){return{
+  name:g('pName').value,resolution:g('pRes').value,aspect_ratio:g('pAspect').value,fps:parseInt(g('pFps').value),
+  video_bitrate:g('pVBitrate').value,video_bufsize:g('pVBuf').value,gop_seconds:parseInt(g('pGop').value),video_normalize:g('pVNorm').checked,
+  audio_codec:g('pACodec').value,audio_bitrate:g('pABitrate').value,audio_bufsize:g('pABuf').value,
+  audio_channels:parseInt(g('pAChan').value),audio_sample_rate:parseInt(g('pASample').value),audio_normalize:g('pANorm').checked,
+  hwaccel:g('pHw').value,hwaccel_device:g('pHwDev').value||null};}
+async function saveProfile(){
+  const id=g('pId').value;const b=body();
+  if(!b.name){toast('Name required',true);return;}
+  try{if(id)await api('/profiles/'+id,'PUT',b);else await api('/profiles','POST',b);
+    toast('Saved');closeEdit();load();
+  }catch(e){toast('Failed: '+e.message,true);}
+}
+async function deleteProfile(){
+  const id=g('pId').value;if(!id)return;if(!confirm('Delete profile?'))return;
+  await api('/profiles/'+id,'DELETE');toast('Deleted');closeEdit();load();
+}
+load();
+</script>
+{% endblock %}
