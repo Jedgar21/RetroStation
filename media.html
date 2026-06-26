@@ -63,18 +63,32 @@
   </div>
 </div>
 
-<!-- source modal -->
+<!-- source modal: browser-based sign-in -->
 <div id="srcModal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50" onclick="closeM('srcModal',event)">
-  <div class="card p-5 w-96" onclick="event.stopPropagation()">
-    <div class="text-sm font-bold mb-3">Link Plex / Jellyfin</div>
-    <label>Type</label><select id="srcKind"><option value="plex">Plex</option><option value="jellyfin">Jellyfin</option></select>
-    <label>Name</label><input id="srcName" placeholder="home">
-    <label>Server URL</label><input id="srcUrl" placeholder="http://192.168.1.10:32400">
-    <label>Token / API key</label><input id="srcToken" placeholder="X-Plex-Token or Jellyfin API key">
-    <label>Jellyfin user id (Jellyfin only)</label><input id="srcUser" placeholder="optional">
-    <div class="flex justify-end gap-2 mt-4">
-      <button class="btn-ghost" onclick="closeM('srcModal')">Cancel</button>
-      <button class="btn" onclick="saveSource()">Link</button>
+  <div class="card p-5 w-[460px] max-w-[94vw]" onclick="event.stopPropagation()">
+    <div class="text-sm font-bold mb-3">Link a media server</div>
+
+    <!-- step 1: choose -->
+    <div id="authChoose">
+      <button class="btn w-full mb-2" onclick="plexSignIn()">▶ Sign in with Plex</button>
+      <div class="text-dim text-[11px] text-center my-2">— or —</div>
+      <label>Jellyfin server URL</label>
+      <input id="jfUrl" placeholder="http://192.168.1.10:8096">
+      <button class="btn-ghost w-full mt-2" onclick="jellyfinConnect()">Connect Jellyfin (Quick Connect)</button>
+      <div class="text-dim text-[10px] mt-3">Plex opens a sign-in page in a new tab. Jellyfin shows a code you enter in your own Jellyfin web app (Quick Connect must be enabled on the server).</div>
+    </div>
+
+    <!-- step 2: waiting for approval -->
+    <div id="authWait" class="hidden text-center py-4">
+      <div id="authMsg" class="text-glow mb-2"></div>
+      <div id="authCode" class="text-3xl tracking-[0.3em] font-bold my-3"></div>
+      <div id="authHint" class="text-dim text-[12px]"></div>
+      <div class="text-amber text-[11px] mt-3 animate-pulse">Waiting for approval…</div>
+      <button class="btn-ghost mt-3" onclick="cancelAuth()">Cancel</button>
+    </div>
+
+    <div class="flex justify-end mt-4" id="authCloseRow">
+      <button class="btn-ghost" onclick="closeM('srcModal')">Close</button>
     </div>
   </div>
 </div>
@@ -184,11 +198,81 @@ function renderSources(c){
     }).catch(()=>{});
   });
 }
-async function saveSource(){
-  const body={kind:$('#srcKind').value,name:$('#srcName').value,base_url:$('#srcUrl').value,
-    token:$('#srcToken').value,user_id:$('#srcUser').value||null};
-  if(!body.name||!body.base_url||!body.token){toast('Name, URL, token required',true);return;}
-  await api('/sources','POST',body);toast('Linked');closeM('srcModal');load();
+async function saveSource(){ /* replaced by browser auth flows below */ }
+
+let authPoll=null, authWindow=null;
+function showWait(msg, code, hint){
+  $('#authChoose').classList.add('hidden');
+  $('#authWait').classList.remove('hidden');
+  $('#authCloseRow').classList.add('hidden');
+  $('#authMsg').textContent=msg;
+  $('#authCode').textContent=code||'';
+  $('#authHint').textContent=hint||'';
+}
+function resetAuth(){
+  if(authPoll){clearInterval(authPoll);authPoll=null;}
+  $('#authChoose').classList.remove('hidden');
+  $('#authWait').classList.add('hidden');
+  $('#authCloseRow').classList.remove('hidden');
+}
+function cancelAuth(){resetAuth();}
+
+// ---- Plex ----
+async function plexSignIn(){
+  let start;
+  try{ start=await api('/auth/plex/start','POST',{}); }
+  catch(e){ toast('Plex sign-in failed: '+e.message,true); return; }
+  // open the Plex auth page in a new tab
+  authWindow=window.open(start.auth_url,'_blank');
+  showWait('Approve FieldStation in the Plex tab that opened.',
+           start.code, 'If no tab opened, allow pop-ups and retry.');
+  // poll for the token
+  authPoll=setInterval(async()=>{
+    try{
+      const r=await api('/auth/plex/poll/'+start.pin_id);
+      if(r.status==='authorized'){
+        clearInterval(authPoll);authPoll=null;
+        finishPlex(r);
+      }
+    }catch(e){/* keep polling */}
+  },2000);
+}
+async function finishPlex(r){
+  // if multiple servers, let the user pick; else use the first
+  let server=r.servers&&r.servers[0];
+  if(r.servers&&r.servers.length>1){
+    const names=r.servers.map((s,i)=>`${i+1}. ${s.name}`).join('\n');
+    const pick=prompt('Choose a Plex server:\n'+names+'\n\nEnter number:','1');
+    server=r.servers[(parseInt(pick)||1)-1]||r.servers[0];
+  }
+  if(!server){toast('No Plex servers found on this account',true);resetAuth();return;}
+  await api('/auth/save','POST',{kind:'plex',name:server.name||'Plex',
+    base_url:server.base_url,token:r.token});
+  toast('Plex linked: '+server.name);
+  if(authWindow)try{authWindow.close()}catch(e){}
+  resetAuth();closeM('srcModal');load();
+}
+
+// ---- Jellyfin Quick Connect ----
+async function jellyfinConnect(){
+  const url=$('#jfUrl').value.trim();
+  if(!url){toast('Enter your Jellyfin URL',true);return;}
+  let start;
+  try{ start=await api('/auth/jellyfin/start','POST',{base_url:url}); }
+  catch(e){ toast('Quick Connect failed: '+e.message+' (is it enabled on the server?)',true); return; }
+  showWait('Open your Jellyfin web app → it will ask to authorize this code:',
+           start.code, 'Settings → Quick Connect, or the prompt that appears.');
+  authPoll=setInterval(async()=>{
+    try{
+      const r=await api('/auth/jellyfin/poll','POST',{base_url:start.base_url,secret:start.secret});
+      if(r.status==='authorized'){
+        clearInterval(authPoll);authPoll=null;
+        await api('/auth/save','POST',{kind:'jellyfin',name:'Jellyfin',
+          base_url:r.base_url,token:r.token,user_id:r.user_id});
+        toast('Jellyfin linked');resetAuth();closeM('srcModal');load();
+      }
+    }catch(e){/* keep polling */}
+  },2000);
 }
 async function syncSrc(id){
   toast('Syncing… (may take a minute)');
@@ -206,7 +290,7 @@ async function doScan(){
   const r=await api('/media/scan','POST',{folder,media_type});
   toast(`Scanned ${r.scanned} files`);closeM('scanModal');load();
 }
-function closeM(id,e){if(e&&e.target.id!==id&&e.type==='click'&&e.target!==e.currentTarget)return;$('#'+id).classList.add('hidden');}
+function closeM(id,e){if(e&&e.target.id!==id&&e.type==='click'&&e.target!==e.currentTarget)return;$('#'+id).classList.add('hidden');if(id==='srcModal'){if(authPoll){clearInterval(authPoll);authPoll=null;}resetAuth();}}
 load();
 </script>
 {% endblock %}

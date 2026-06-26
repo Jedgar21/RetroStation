@@ -29,6 +29,7 @@ from app.services.epg import generate_epg
 from app.services.scanner import scan_folder
 from app.services.collections import resolve_collection
 from app.services import external as ext
+from app.services import auth_flows
 
 UTC = timezone.utc
 BASE = Path(__file__).resolve().parent
@@ -226,6 +227,45 @@ def list_sources(session: Session = Depends(get_session)):
              "base_url": s.base_url,
              "last_synced": s.last_synced.isoformat() if s.last_synced else None}
             for s in session.exec(select(ExternalSource)).all()]
+
+# --- browser-based auth (Plex PIN flow + Jellyfin Quick Connect) ---
+@app.post("/api/auth/plex/start")
+def auth_plex_start():
+    try:
+        return {"ok": True, **auth_flows.PlexAuth.start()}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+@app.get("/api/auth/plex/poll/{pin_id}")
+def auth_plex_poll(pin_id: int):
+    try:
+        return {"ok": True, **auth_flows.PlexAuth.poll(pin_id)}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+@app.post("/api/auth/jellyfin/start")
+def auth_jf_start(body: dict = Body(...)):
+    try:
+        return {"ok": True, **auth_flows.JellyfinAuth.start(body["base_url"])}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+@app.post("/api/auth/jellyfin/poll")
+def auth_jf_poll(body: dict = Body(...)):
+    try:
+        return {"ok": True,
+                **auth_flows.JellyfinAuth.poll(body["base_url"], body["secret"])}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+@app.post("/api/auth/save")
+def auth_save(body: dict = Body(...), session: Session = Depends(get_session)):
+    src = ExternalSource(
+        kind=SourceKind(body["kind"]), name=body["name"],
+        base_url=body["base_url"], token=body["token"],
+        user_id=body.get("user_id"))
+    session.add(src); session.commit(); session.refresh(src)
+    return {"ok": True, "id": src.id}
 
 @app.post("/api/sources")
 def add_source(body: dict = Body(...), session: Session = Depends(get_session)):
