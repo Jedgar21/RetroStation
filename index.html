@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FieldStation · Scheduler</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { theme: { extend: { colors: {
+  ink:'#0b0d12', panel:'#141821', panel2:'#1b2130', line:'#2a3142',
+  glow:'#46e1a0', amber:'#f0b429', dim:'#7a8398'
+}}}};
+</script>
+<style>
+  body{background:#0b0d12;color:#e6e9f0;font-family:ui-monospace,'SF Mono',Menlo,monospace}
+  .tl-grid{background-image:repeating-linear-gradient(180deg,#1b2130 0 1px,transparent 1px 60px)}
+  .drag-over{outline:2px dashed #46e1a0;outline-offset:-2px;background:#16241d}
+  .chip{cursor:grab}.chip:active{cursor:grabbing}
+  ::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#2a3142;border-radius:4px}
+</style>
+</head>
+<body class="h-screen overflow-hidden">
+
+<!-- top bar -->
+<header class="flex items-center justify-between px-5 py-3 border-b border-line">
+  <div class="flex items-baseline gap-3">
+    <span class="text-glow text-xl tracking-widest font-bold">▚ FIELDSTATION</span>
+    <span class="text-dim text-xs tracking-wide">PROGRAM DIRECTOR</span>
+  </div>
+  <div class="flex items-center gap-2 text-xs">
+    <select id="channelSel" class="bg-panel border border-line rounded px-3 py-1.5"></select>
+    <input id="daySel" type="date" class="bg-panel border border-line rounded px-3 py-1.5 text-dim">
+    <button onclick="openScan()" class="bg-panel border border-line rounded px-3 py-1.5 hover:border-glow">Scan media</button>
+    <button onclick="saveTimeline()" class="bg-glow text-ink font-bold rounded px-4 py-1.5 hover:brightness-110">Save schedule</button>
+    <a href="/playlist.m3u" class="text-dim hover:text-glow px-2">M3U</a>
+    <a href="/epg.xml" class="text-dim hover:text-glow px-2">EPG</a>
+  </div>
+</header>
+
+<div class="flex h-[calc(100vh-57px)]">
+  <!-- ===== sidebar: media library ===== -->
+  <aside class="w-72 shrink-0 border-r border-line overflow-y-auto p-3">
+    <div class="text-dim text-[10px] uppercase tracking-widest mb-2">Library</div>
+    <input id="libFilter" placeholder="filter…" oninput="renderLibrary()"
+      class="w-full bg-panel border border-line rounded px-2 py-1.5 text-xs mb-3">
+    <div id="library" class="space-y-3 text-xs"></div>
+  </aside>
+
+  <!-- ===== main: timeline ===== -->
+  <main class="flex-1 overflow-auto">
+    <!-- rule bar -->
+    <div class="flex items-center gap-2 px-4 py-2 border-b border-line text-xs sticky top-0 bg-ink z-10">
+      <span class="text-dim">Drop rule:</span>
+      <select id="ruleSel" class="bg-panel border border-line rounded px-2 py-1">
+        <option value="chronological">Chronological (S1E1, S1E2…)</option>
+        <option value="shuffle">Shuffle / Random</option>
+        <option value="block">Recurring block</option>
+      </select>
+      <label class="flex items-center gap-1 text-dim ml-2">
+        <input type="checkbox" id="adsBetween" class="accent-glow"> commercials between
+      </label>
+      <span class="text-dim ml-auto" id="status"></span>
+    </div>
+
+    <!-- hour rows -->
+    <div class="relative">
+      <div class="flex">
+        <div class="w-16 shrink-0"></div>
+        <div class="flex-1 text-[10px] text-dim px-2 py-1">drag a show, movie, or commercial group onto an hour →</div>
+      </div>
+      <div id="timeline"></div>
+    </div>
+  </main>
+</div>
+
+<!-- scan modal -->
+<div id="scanModal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+  <div class="bg-panel border border-line rounded-lg p-5 w-96">
+    <div class="text-sm font-bold mb-3">Scan media folder</div>
+    <label class="text-[10px] text-dim uppercase tracking-widest">Folder path (inside container)</label>
+    <input id="scanFolder" placeholder="/media/cartoons" class="w-full bg-ink border border-line rounded px-2 py-1.5 text-xs mt-1 mb-3">
+    <label class="text-[10px] text-dim uppercase tracking-widest">Type</label>
+    <select id="scanType" class="w-full bg-ink border border-line rounded px-2 py-1.5 text-xs mt-1 mb-4">
+      <option value="">auto-detect (show / movie)</option>
+      <option value="show">TV show</option>
+      <option value="movie">Movie</option>
+      <option value="commercial">Commercial / bumper</option>
+    </select>
+    <div class="flex gap-2 justify-end">
+      <button onclick="closeScan()" class="text-dim text-xs px-3 py-1.5">cancel</button>
+      <button onclick="doScan()" class="bg-glow text-ink font-bold rounded px-4 py-1.5 text-xs">Scan</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let LIBRARY = {shows:{}, movies:[], commercials:[]};
+let CHANNELS = [];
+let DRAG = null;                 // {kind, payload}
+const HOURS = 24, ROW_PX = 60;   // 1 hour = 60px
+
+function status(msg){ $('#status').textContent = msg; setTimeout(()=>$('#status').textContent='',3000); }
+
+// ---------- load ----------
+async function init(){
+  $('#daySel').value = new Date().toISOString().slice(0,10);
+  CHANNELS = await (await fetch('/api/channels')).json();
+  const sel = $('#channelSel'); sel.innerHTML='';
+  if(!CHANNELS.length){
+    sel.innerHTML='<option>— no channels —</option>';
+  } else {
+    CHANNELS.forEach(c=> sel.innerHTML += `<option value="${c.id}">${c.number} · ${c.name}</option>`);
+  }
+  sel.onchange = loadSchedule;
+  $('#daySel').onchange = loadSchedule;
+  await loadLibrary();
+  buildTimeline();
+  loadSchedule();
+}
+
+async function loadLibrary(){
+  LIBRARY = await (await fetch('/api/media')).json();
+  renderLibrary();
+}
+
+function renderLibrary(){
+  const f = ($('#libFilter').value||'').toLowerCase();
+  const box = $('#library'); box.innerHTML='';
+  // shows (each show is a draggable GROUP)
+  const showNames = Object.keys(LIBRARY.shows).filter(n=>n.toLowerCase().includes(f));
+  if(showNames.length){
+    box.innerHTML += `<div class="text-dim text-[10px] uppercase tracking-widest">Shows</div>`;
+    showNames.forEach(name=>{
+      const eps = LIBRARY.shows[name];
+      const el = document.createElement('div');
+      el.className='chip bg-panel border border-line rounded px-2 py-1.5 hover:border-glow';
+      el.draggable=true;
+      el.innerHTML = `<div class="font-bold">${name}</div><div class="text-dim text-[10px]">${eps.length} episodes · drag to schedule</div>`;
+      el.ondragstart = ()=> DRAG={kind:'show', show:name, eps};
+      box.appendChild(el);
+    });
+  }
+  const movies = LIBRARY.movies.filter(m=>m.title.toLowerCase().includes(f));
+  if(movies.length){
+    box.innerHTML += `<div class="text-dim text-[10px] uppercase tracking-widest mt-2">Movies</div>`;
+    movies.forEach(m=>{
+      const el=document.createElement('div');
+      el.className='chip bg-panel border border-line rounded px-2 py-1.5 hover:border-glow';
+      el.draggable=true;
+      el.innerHTML=`<div>${m.title}</div><div class="text-dim text-[10px]">${fmtDur(m.duration)}</div>`;
+      el.ondragstart=()=> DRAG={kind:'movie', item:m};
+      box.appendChild(el);
+    });
+  }
+  if(LIBRARY.commercials.length){
+    box.innerHTML += `<div class="text-dim text-[10px] uppercase tracking-widest mt-2">Commercials</div>`;
+    const el=document.createElement('div');
+    el.className='chip bg-panel border border-amber/40 rounded px-2 py-1.5';
+    el.draggable=true;
+    el.innerHTML=`<div class="text-amber">Commercial pool</div><div class="text-dim text-[10px]">${LIBRARY.commercials.length} clips · drag as filler</div>`;
+    el.ondragstart=()=> DRAG={kind:'commercials', items:LIBRARY.commercials};
+    box.appendChild(el);
+  }
+  if(!box.innerHTML) box.innerHTML='<div class="text-dim">No media yet. Use “Scan media”.</div>';
+}
+
+// ---------- timeline ----------
+function buildTimeline(){
+  const tl = $('#timeline'); tl.innerHTML='';
+  for(let h=0; h<HOURS; h++){
+    const row=document.createElement('div');
+    row.className='flex border-b border-line/40';
+    row.style.height=ROW_PX+'px';
+    row.innerHTML=`<div class="w-16 shrink-0 text-[10px] text-dim px-2 pt-1 border-r border-line/40">${String(h).padStart(2,'0')}:00</div>`;
+    const drop=document.createElement('div');
+    drop.className='flex-1 relative tl-grid';
+    drop.dataset.hour=h;
+    drop.ondragover=e=>{e.preventDefault();drop.classList.add('drag-over');};
+    drop.ondragleave=()=>drop.classList.remove('drag-over');
+    drop.ondrop=e=>{e.preventDefault();drop.classList.remove('drag-over');onDrop(h);};
+    row.appendChild(drop);
+    tl.appendChild(row);
+  }
+}
+
+let PENDING = [];   // {media_id,start,end,title,rule} not yet saved
+
+function dayStart(){ return new Date($('#daySel').value+'T00:00:00'); }
+
+async function onDrop(hour){
+  if(!DRAG){return;}
+  const ch = $('#channelSel').value;
+  if(!ch||ch==='— no channels —'){status('Create a channel first');return;}
+  const rule = $('#ruleSel').value;
+  const ads = $('#adsBetween').checked;
+  const start = new Date(dayStart()); start.setHours(hour,0,0,0);
+  // a drop fills from this hour to end of day by default; server expands the rule
+  const end = new Date(dayStart()); end.setHours(24,0,0,0);
+
+  // For show/commercial pools we ask the server to expand the rule into slots.
+  // For a single movie we drop just that one item.
+  if(DRAG.kind==='movie'){
+    const m=DRAG.item;
+    const e=new Date(start.getTime()+ (m.duration*1000));
+    PENDING.push({media_id:m.id,start:start.toISOString(),end:e.toISOString(),title:m.title,rule:'chronological'});
+    renderPending(); status('Added '+m.title);
+  } else {
+    const body={
+      channel_id:parseInt(ch), start:start.toISOString(), end:end.toISOString(),
+      rule, commercial_between:ads,
+      show_title: DRAG.kind==='show'?DRAG.show:null,
+      media_type: DRAG.kind==='commercials'?'commercial':null
+    };
+    status('Generating…');
+    const r=await (await fetch('/api/schedule/generate',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    status(`Scheduled ${r.created} blocks`);
+    loadSchedule();
+  }
+  DRAG=null;
+}
+
+function renderPending(){
+  // draw PENDING (unsaved single-item drops) over the grid
+  document.querySelectorAll('.pending-chip').forEach(e=>e.remove());
+  PENDING.forEach(p=>place(p,true));
+}
+
+async function loadSchedule(){
+  const ch=$('#channelSel').value;
+  if(!ch||isNaN(parseInt(ch)))return;
+  document.querySelectorAll('.slot-chip').forEach(e=>e.remove());
+  const day=$('#daySel').value;
+  const rows=await (await fetch(`/api/schedule?channel_id=${ch}&day=${day}`)).json();
+  rows.forEach(s=>place({...s, start:s.start, end:s.end, title:s.title},false));
+}
+
+function place(slot, pending){
+  const start=new Date(slot.start), end=new Date(slot.end);
+  const top = (start.getHours()+start.getMinutes()/60)*ROW_PX;
+  const h = Math.max(14, ((end-start)/3600000)*ROW_PX - 2);
+  const rows=$('#timeline');
+  const chip=document.createElement('div');
+  chip.className=(pending?'pending-chip ':'slot-chip ')+
+    'absolute left-16 right-2 rounded px-2 py-0.5 text-[10px] overflow-hidden '+
+    (pending?'bg-amber/20 border border-amber/50':'bg-glow/15 border border-glow/40');
+  chip.style.top=top+'px'; chip.style.height=h+'px';
+  chip.innerHTML=`<span class="${pending?'text-amber':'text-glow'}">${slot.title||'—'}</span>
+    <span class="text-dim"> ${start.toTimeString().slice(0,5)}</span>`;
+  rows.style.position='relative';
+  rows.appendChild(chip);
+}
+
+async function saveTimeline(){
+  const ch=$('#channelSel').value;
+  if(!ch||isNaN(parseInt(ch))){status('No channel');return;}
+  if(!PENDING.length){status('Nothing new to save (generated blocks auto-saved)');return;}
+  const r=await (await fetch('/api/schedule/save',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({channel_id:parseInt(ch),slots:PENDING})})).json();
+  PENDING=[]; renderPending(); loadSchedule();
+  status(`Saved ${r.created} items`);
+}
+
+function fmtDur(s){s=Math.round(s||0);const m=Math.floor(s/60);return m?`${Math.floor(m/60)?Math.floor(m/60)+'h':''}${m%60}m`:`${s}s`;}
+
+// scan modal
+function openScan(){$('#scanModal').classList.remove('hidden');}
+function closeScan(){$('#scanModal').classList.add('hidden');}
+async function doScan(){
+  const folder=$('#scanFolder').value.trim();
+  if(!folder){return;}
+  const media_type=$('#scanType').value||null;
+  status('Scanning…');
+  const r=await (await fetch('/api/media/scan',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({folder,media_type})})).json();
+  status(`Scanned ${r.scanned} files`); closeScan(); loadLibrary();
+}
+
+init();
+</script>
+</body>
+</html>

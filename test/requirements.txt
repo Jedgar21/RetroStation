@@ -1,3 +1,0 @@
-flask>=2.0
-# optional, for `pytest tests/`:
-# pytest>=7.0

@@ -1,181 +1,121 @@
-# RetroStation
+# FieldStation
 
-A linear TV broadcast simulator in the spirit of **ErsatzTV** and **FieldStation42**.
-Point it at media — **local folders and/or Plex libraries** — and each becomes a
-"channel" broadcasting on a continuous 24h schedule. Tune in and you join whatever
-is **currently airing, in progress**, transcoded live so any codec plays in any browser.
-
-## What's new in v2
-
-- **Live HLS transcoding** (ffmpeg): any source codec → H.264/AAC HLS, seeked to
-  the broadcast offset. Already-compatible files are remuxed (copied) to save CPU.
-- **Plex as a media source** alongside local files — pull whole libraries (Movies
-  or TV Shows) by name; episodes carry season/episode metadata for grid scheduling.
-- **Weekly schedule grid**: define recurring slots ("Mon–Fri 18:00 → *The News*,
-  30m") and the engine airs sequential episodes in each slot, deterministically,
-  padding gaps with filler. Or keep the original **shuffle** mode.
+A self-hosted retro TV station that turns your media library into continuous,
+linear IPTV channels — schedule shows and commercials on a visual timeline, then
+tune in from Plex Live TV, Jellyfin, TiViMate, or any IPTV player via a standard
+M3U + XMLTV EPG.
 
 ## Architecture
 
-| File | Role |
-|---|---|
-| `sources.py` | Pluggable media providers: `LocalSource`, `PlexSource` (+ `PlexServer` client) |
-| `station.py` | Scheduling engine — `Channel` (shuffle + grid modes), `Slot`, `Station` |
-| `transcoder.py` | Per-channel ffmpeg → live HLS sessions, restart-on-program-change |
-| `server.py` | Flask UI + `/api/guide`, `/api/now/<n>`, `/hls/<n>/...` |
-| `retrostation.py` | CLI to manage Plex servers, channels, and grid slots |
-
-Schedules are deterministic: the same wall-clock time always maps to the same
-program at the same offset, so channels "broadcast" whether or not anyone watches.
-
-## Requirements
-
-- Python 3.9+, `ffmpeg`/`ffprobe`
-- `pip install flask`
-- (optional) a Plex Media Server + token for Plex sources
-
-## Setup
-
-```bash
-pip install flask
-
-# --- optional: connect Plex ---
-python retrostation.py plex-add --name home \
-    --url http://192.168.1.10:32400 --token YOURPLEXTOKEN
-python retrostation.py plex-sections --name home     # see exact library names
-
-# --- a local shuffle channel with ad breaks every 20 min ---
-python retrostation.py channel-add --number 2 --name "TOON TV" --mode shuffle \
-    --local ~/media/cartoons --ads-local ~/media/commercials --break-every 1200
-
-# --- a shuffle channel from a Plex movie library ---
-python retrostation.py channel-add --number 4 --name "MOVIE NIGHT" --mode shuffle \
-    --plex home:Movies
-
-# --- a weekly GRID channel from Plex TV Shows ---
-python retrostation.py channel-add --number 5 --name "PRIMETIME" --mode grid \
-    --plex home:"TV Shows"
-python retrostation.py slot-add --channel 5 --days mon,tue,wed,thu,fri \
-    --start 18:00 --show "The News" --block 30
-python retrostation.py slot-add --channel 5 --days mon,tue,wed,thu,fri \
-    --start 18:30 --show "Cheers" --block 30
-
-# --- run it ---
-python retrostation.py guide      # what's on right now
-python server.py                  # web UI at http://localhost:5005
-python retrostation.py watch 5    # ffplay, joins in progress
+```
+ ┌─────────────┐   drag&drop    ┌──────────────┐   slots    ┌──────────────┐
+ │  Scheduler  │ ─────────────▶ │  FastAPI +   │ ─────────▶ │   SQLite     │
+ │  (browser)  │   /api/...     │  SQLModel    │            │ (single file)│
+ └─────────────┘                └──────┬───────┘            └──────────────┘
+                                       │ playlist_window()
+                                       ▼
+                                ┌──────────────┐  concat   ┌──────────────┐
+                                │  StreamMgr   │ ────────▶ │   ffmpeg     │
+                                │ (1 proc/ch)  │ playlist  │ (continuous  │
+                                └──────┬───────┘           │  MPEG-TS)    │
+                                       │ /stream/2.1.ts    └──────────────┘
+                                       ▼
+                          Plex / Jellyfin / TiViMate
 ```
 
-## Finding your Plex token
+- **Backend:** FastAPI (async), SQLModel/SQLite (single-file DB, WAL mode).
+- **Streaming:** one long-lived ffmpeg process per channel, fed a concat
+  playlist that a background refiller keeps extended hours ahead of playback, so
+  the MPEG-TS never EOFs and IPTV clients never disconnect.
+- **Hardware transcoding:** VAAPI / QuickSync (QSV) / NVENC, selected per
+  channel via an `FFmpegProfile`.
+- **Frontend:** HTML5 drag-and-drop + Tailwind, EPG-style timeline.
 
-In the Plex web app, play any item → ⋯ → **Get Info** → **View XML**; the URL
-contains `X-Plex-Token=...`. (Or check `Preferences.xml` on the server.)
+### Why the continuous stream is built this way
 
-## Configuring from the browser
+IPTV clients treat any end-of-stream as a disconnect. FFmpeg's concat demuxer
+reads its playlist when the input opens, and appended lines aren't reliably
+re-read mid-stream across builds. So instead of appending one file at a time,
+the refiller keeps the playlist materialized to cover a long window (default 6h)
+of the schedule, far ahead of the play head. The schedule is the source of truth
+(rows in `schedule_slot`); the playlist is just its materialization. This is
+robust across ffmpeg versions and survives indefinitely.
 
-Everything can be set up from the web UI — no CLI or JSON editing required.
-Start the server (`python server.py`) and click **CONFIGURE** (top-right of the
-TV guide), or go straight to `http://localhost:5005/admin`. Three tabs:
-
-- **Channels** — create, edit, delete channels; add local-folder or Plex-library
-  sources; build weekly grid slots; set ad breaks and sign-off windows. "Rescan"
-  re-indexes a channel's sources after you add media.
-- **Plex** — connect/disconnect Plex servers and list their libraries (so you can
-  copy exact names into a channel's sources).
-- **Transcoding** — live hardware detection (shows which encoders actually work
-  on this machine), plus the encoder picker, device, bitrate, preset, and segment
-  length. Applying changes rebuilds the encoder immediately.
-
-The CLI (`retrostation.py`) still does everything the GUI does, for headless or
-scripted setups. Both read and write the same `station.json`.
-
-## Hardware-accelerated transcoding
-
-By default the transcoder uses `auto`, which probes for a working hardware H.264
-encoder and falls back to CPU (`libx264`) if none is usable. Hardware encoding
-dramatically lowers CPU load — useful for a small LXC/VM or several simultaneous
-viewers.
-
-See what your machine actually supports:
+## Quick start (Docker — recommended)
 
 ```bash
-python retrostation.py encoders
+# 1. edit docker-compose.yml: set your media path and host render GID
+getent group render          # note the GID, put it under group_add
+#    change /mnt/media:/media:ro to your library location
+
+docker compose up -d --build
+
+# 2. verify Intel hardware acceleration is visible inside the container
+docker compose exec fieldstation vainfo     # should list H264 VAProfiles
+
+# 3. open the scheduler
+#    http://<host>:8000
 ```
 
-This lists the encoders compiled into ffmpeg *and* runtime-tests each one (a
-compiled-in encoder still fails without the device/drivers/passthrough), then
-shows what `auto` would pick.
+## Using it
 
-Choose an encoder:
+1. **Scan media** (button, top bar) — point it at `/media/...` folders. Mark a
+   folder as TV / Movie / Commercial, or let it auto-detect from `SxxExx` names.
+2. **Create a channel** (POST `/api/channels`, or seed one) with a number like
+   `2.1` and an FFmpeg profile.
+3. **Schedule** — drag a show, movie, or the commercial pool onto an hour. Pick a
+   rule: Chronological, Shuffle, or Recurring block, optionally with commercials
+   between programs.
+4. **Tune in** from your IPTV player:
+   - M3U:  `http://<host>:8000/playlist.m3u`
+   - EPG:  `http://<host>:8000/epg.xml`
+   - Single channel: `http://<host>:8000/stream/2.1.ts`
 
-```bash
-# NVIDIA
-python retrostation.py transcode-set --encoder nvenc --bitrate 6000k
+### Plex Live TV / Jellyfin
 
-# Intel Quick Sync
-python retrostation.py transcode-set --encoder qsv
+Add the M3U as a tuner and the EPG XML as the guide source. Both Plex (via an
+HDHomeRun-style M3U tuner) and Jellyfin (Live TV → M3U Tuner + XMLTV) accept
+these URLs directly.
 
-# VAAPI (Intel/AMD on Linux) — point at your render node
-python retrostation.py transcode-set --encoder vaapi --device /dev/dri/renderD128
+## FFmpeg profiles & hardware acceleration
 
-# Apple Silicon / macOS
-python retrostation.py transcode-set --encoder videotoolbox
+A profile sets resolution, aspect ratio (16:9 or **4:3** for retro pillarboxing),
+codecs, bitrate, and the hwaccel mode:
 
-# force software (or let auto handle it)
-python retrostation.py transcode-set --encoder cpu
-```
-
-| Encoder | ffmpeg codec | Hardware |
+| hwaccel | encoder | hardware |
 |---|---|---|
-| `cpu` | libx264 | any (software) |
-| `nvenc` | h264_nvenc | NVIDIA GPUs |
-| `qsv` | h264_qsv | Intel Quick Sync (iGPU) |
-| `vaapi` | h264_vaapi | Intel/AMD on Linux |
-| `videotoolbox` | h264_videotoolbox | Apple Silicon/macOS |
+| `none` | libx264 | any (software) |
+| `vaapi` | h264_vaapi | Intel/AMD on Linux (QuickSync via VAAPI) |
+| `qsv` | h264_qsv | Intel QuickSync native |
+| `nvenc` | h264_nvenc | NVIDIA |
 
-Other knobs: `--bitrate` (e.g. `3500k`, `6000k`), `--preset` (backend-specific),
-`--hls-time` (segment length), `--no-copy` (always re-encode instead of remuxing
-already-compatible files), `--no-verify` (skip the startup probe). Settings are
-saved to the `transcode` block of `station.json`; **restart the server** for them
-to take effect.
+For Intel QSV in Docker, the compose file passes `/dev/dri` and adds the host
+render group; the image ships `intel-media-va-driver-non-free`. Set the profile's
+`hwaccel_device` to `/dev/dri/renderD128`.
 
-If a requested encoder can't run, the server logs a notice and falls back to CPU
-rather than taking channels off the air — so a misconfiguration never blocks
-playback.
+## Layout
 
-### Passing a GPU into a container
+```
+app/
+  main.py              FastAPI app + all routes
+  models.py            SQLModel schema (MediaItem, Channel, FFmpegProfile, ScheduleSlot)
+  database.py          SQLite engine/session (WAL)
+  core/
+    ffmpeg_cmd.py      profile -> ffmpeg flags (incl. hwaccel paths)
+    streamer.py        continuous-stream engine + refiller
+  services/
+    scheduler.py       rule expansion + playlist windows
+    epg.py             XMLTV generator
+    scanner.py         media library scan (ffprobe)
+  templates/index.html drag-and-drop scheduler UI
+Dockerfile
+docker-compose.yml
+requirements.txt
+```
 
-Hardware encoding needs the device available inside the container:
+## Notes
 
-- **Docker (NVIDIA):** install the NVIDIA Container Toolkit, run with `--gpus all`.
-- **Docker (VAAPI/QSV):** pass the render node with `--device /dev/dri`.
-- **Proxmox LXC (VAAPI/QSV):** bind-mount `/dev/dri` into the container and use
-  `--encoder vaapi --device /dev/dri/renderD128`.
-
-Confirm it worked by running `python retrostation.py encoders` *inside* the
-container — the encoder should report `WORKS`.
-
-## Source mixing
-
-A channel can pull from multiple sources at once — repeat `--local` and `--plex`.
-Commercials/bumpers come from a separate pool (`--ads-local` / `--ads-plex`); put
-your bumpers in a dedicated Plex library or folder and they'll be injected between
-programs per `--break-every`.
-
-## Scheduling modes
-
-**shuffle** — deterministic per-day shuffle of the pool, looped to fill 24h, with
-optional ad breaks. Good for cartoon/music-video/movie channels.
-
-**grid** — fixed weekly slots. Each slot draws sequential episodes of its show
-(advancing day to day), and the engine fills the gaps with filler + ads. Edit
-`station.json` for advanced knobs (`commercials_per_break`, `sign_off_start`/`_end`).
-
-## Notes & limits
-
-- One ffmpeg process per *actively watched* channel; idle channels cost nothing.
-- HLS is a short sliding live window, so disk/memory stay bounded.
-- Plex streams are pulled as direct file parts and transcoded locally by
-  RetroStation (Plex isn't asked to transcode).
-- `-ss` uses fast input seek (keyframe-accurate), so the join point can be off by
-  up to one GOP — imperceptible for TV-style viewing.
+- Run a single uvicorn worker: the StreamManager holds ffmpeg processes
+  in-process, so multiple workers would each spawn duplicates.
+- Times are stored UTC; set `TZ` in compose so the EPG shows your local time.
+- The DB lives in `./data` (mounted volume) and persists across restarts.
