@@ -24,19 +24,47 @@ from flask import (Flask, jsonify, send_from_directory, abort,
 
 from station import Station
 from transcoder import Transcoder
+from admin_api import register_admin
 
 app = Flask(__name__)
 station = Station()
-trans = Transcoder()
+trans = None   # built in boot() from the station's transcode settings
 
 # debounce restarts: only re-evaluate a channel's session every N secs
 _last_eval: dict = {}
 _eval_lock = threading.Lock()
 
 
+def build_transcoder():
+    """(Re)build the global Transcoder from station.transcode settings."""
+    global trans
+    if trans is not None:
+        try:
+            trans.cleanup()
+        except Exception:
+            pass
+    t = station.transcode
+    trans = Transcoder(
+        hls_time=t.get("hls_time", 4), window=t.get("window", 8),
+        video_bitrate=t.get("video_bitrate", "3500k"),
+        try_copy=t.get("try_copy", True),
+        encoder=t.get("encoder", "auto"), encoder_device=t.get("device"),
+        preset=t.get("preset"), verify_encoder=t.get("verify_encoder", True),
+    )
+    return trans
+
+
 def boot():
     if os.path.exists("station.json"):
         station.load()
+    build_transcoder()
+
+
+# expose admin endpoints (channels, plex, slots, transcode, encoders)
+register_admin(app,
+               get_station=lambda: station,
+               get_trans=lambda: trans,
+               rebuild_trans=build_transcoder)
 
 
 @app.route("/api/guide")
@@ -100,6 +128,12 @@ def index():
     return render_template_string(UI)
 
 
+@app.route("/admin")
+def admin_page():
+    here = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(here, "admin.html")
+
+
 UI = r"""
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -138,7 +172,7 @@ UI = r"""
   .badge.plex{background:#e5a00d;color:#000}
 </style></head><body>
 <div class="tv">
-  <h1>&#9626; RETROSTATION</h1>
+  <h1>&#9626; RETROSTATION <a href="/admin" style="float:right;font-size:12px;color:#6b6b80;text-decoration:none;letter-spacing:1px;border:1px solid #2a2a3a;padding:4px 10px;border-radius:4px">&#9881; CONFIGURE</a></h1>
   <div class="sub">linear broadcast simulator &mdash; local + plex, transcoded live, join mid-program</div>
   <div class="screen">
     <video id="v" controls autoplay playsinline></video>

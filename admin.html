@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RetroStation · Configure</title>
+<style>
+  :root{
+    --bg:#0a0a0f; --panel:#15151f; --panel2:#1d1d2c; --line:#2a2a3a;
+    --accent:#3ddc84; --amber:#e5a00d; --red:#c0392b;
+    --ink:#e8e8f0; --dim:#6b6b80;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);
+    font-family:'Courier New',ui-monospace,monospace;line-height:1.5}
+  a{color:var(--accent)}
+  .wrap{max-width:920px;margin:0 auto;padding:20px}
+  header{display:flex;align-items:baseline;justify-content:space-between;
+    border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:20px}
+  h1{color:var(--accent);letter-spacing:3px;font-size:20px}
+  h1 small{color:var(--dim);letter-spacing:1px;font-size:11px;display:block;margin-top:3px}
+  .back{font-size:12px;color:var(--dim);text-decoration:none;border:1px solid var(--line);
+    padding:5px 12px;border-radius:4px}
+  .back:hover{color:var(--accent);border-color:var(--accent)}
+  /* tabs */
+  .tabs{display:flex;gap:4px;margin-bottom:18px;flex-wrap:wrap}
+  .tab{background:var(--panel);border:1px solid var(--line);color:var(--dim);
+    padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;letter-spacing:1px}
+  .tab.active{color:var(--accent);border-color:var(--accent);background:var(--panel2)}
+  .view{display:none}.view.active{display:block}
+  /* cards */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:16px;margin-bottom:14px}
+  .card h3{font-size:14px;color:var(--ink);margin-bottom:12px;letter-spacing:1px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .grow{flex:1;min-width:120px}
+  label{display:block;font-size:11px;color:var(--dim);text-transform:uppercase;
+    letter-spacing:1px;margin:10px 0 4px}
+  input,select{width:100%;background:#0c0c14;border:1px solid var(--line);
+    color:var(--ink);padding:9px 10px;border-radius:5px;font-family:inherit;font-size:13px}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  button{background:var(--accent);color:#000;border:none;padding:9px 16px;
+    border-radius:5px;cursor:pointer;font-family:inherit;font-weight:bold;
+    font-size:13px;letter-spacing:1px}
+  button:hover{filter:brightness(1.1)}
+  button.ghost{background:transparent;color:var(--dim);border:1px solid var(--line);font-weight:normal}
+  button.ghost:hover{color:var(--accent);border-color:var(--accent)}
+  button.danger{background:transparent;color:var(--red);border:1px solid var(--red)}
+  button.danger:hover{background:var(--red);color:#fff}
+  .tag{display:inline-block;font-size:10px;padding:2px 7px;border-radius:3px;
+    background:var(--line);color:var(--dim);margin-left:6px}
+  .tag.plex{background:var(--amber);color:#000}
+  .tag.live{background:var(--accent);color:#000}
+  .tag.cpu{background:var(--line);color:var(--ink)}
+  .src-list{margin:8px 0}
+  .src-item{display:flex;justify-content:space-between;align-items:center;
+    background:#0c0c14;border:1px solid var(--line);border-radius:5px;
+    padding:7px 10px;margin:5px 0;font-size:12px}
+  .muted{color:var(--dim);font-size:12px}
+  .pill{font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid var(--line)}
+  .pill.ok{color:var(--accent);border-color:var(--accent)}
+  .pill.no{color:var(--dim)}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+    background:var(--panel2);border:1px solid var(--accent);color:var(--ink);
+    padding:10px 18px;border-radius:6px;font-size:13px;opacity:0;transition:.3s;
+    pointer-events:none;z-index:50;max-width:90%}
+  .toast.show{opacity:1}
+  .toast.err{border-color:var(--red)}
+  .channel-hd{display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+  .chnum{color:var(--accent);font-weight:bold;font-size:18px;margin-right:10px}
+  .slot{display:flex;justify-content:space-between;align-items:center;
+    background:#0c0c14;border:1px solid var(--line);border-radius:5px;padding:7px 10px;margin:5px 0;font-size:12px}
+  .hide{display:none}
+  .help{font-size:11px;color:var(--dim);margin-top:4px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:560px){.two{grid-template-columns:1fr}}
+</style></head>
+<body><div class="wrap">
+  <header>
+    <h1>&#9626; CONFIGURE <small>RETROSTATION CONTROL ROOM</small></h1>
+    <a class="back" href="/">&#8592; BACK TO TV</a>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" data-v="channels">CHANNELS</div>
+    <div class="tab" data-v="plex">PLEX</div>
+    <div class="tab" data-v="transcode">TRANSCODING</div>
+  </div>
+
+  <!-- ============================ CHANNELS ============================ -->
+  <div class="view active" id="v-channels">
+    <div id="channelList"></div>
+    <div class="card">
+      <h3 id="chFormTitle">+ NEW CHANNEL</h3>
+      <div class="two">
+        <div><label>Channel number</label><input id="chNum" type="number" placeholder="2"></div>
+        <div><label>Name</label><input id="chName" placeholder="TOON TV"></div>
+      </div>
+      <div class="two">
+        <div><label>Mode</label>
+          <select id="chMode">
+            <option value="shuffle">shuffle — loop the pool all day</option>
+            <option value="grid">grid — fixed weekly schedule</option>
+          </select></div>
+        <div><label>Ad break every (minutes, 0 = off)</label>
+          <input id="chBreak" type="number" placeholder="0"></div>
+      </div>
+
+      <label>Program sources</label>
+      <div class="src-list" id="progSources"></div>
+      <div class="row">
+        <select id="srcType" style="max-width:130px">
+          <option value="local">local folder</option>
+          <option value="plex">plex library</option>
+        </select>
+        <input id="srcVal" class="grow" placeholder="/media/cartoons  (or  server:Library)">
+        <button class="ghost" onclick="addSource('program')">add</button>
+      </div>
+      <div class="help">Local: a folder path inside the container. Plex: <code>servername:Library Name</code>.</div>
+
+      <label>Commercial / bumper sources (optional)</label>
+      <div class="src-list" id="adSources"></div>
+      <div class="row">
+        <select id="adType" style="max-width:130px">
+          <option value="local">local folder</option>
+          <option value="plex">plex library</option>
+        </select>
+        <input id="adVal" class="grow" placeholder="/media/commercials">
+        <button class="ghost" onclick="addSource('commercial')">add</button>
+      </div>
+
+      <div class="two" style="margin-top:12px">
+        <div><label>Sign-off start (HH:MM, optional)</label><input id="chSoStart" placeholder="02:00"></div>
+        <div><label>Sign-off end (HH:MM, optional)</label><input id="chSoEnd" placeholder="06:00"></div>
+      </div>
+
+      <div class="row" style="margin-top:16px">
+        <button onclick="saveChannel()">SAVE CHANNEL</button>
+        <button class="ghost" onclick="resetChannelForm()">clear</button>
+        <span class="muted" id="chSaveNote"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== PLEX ============================== -->
+  <div class="view" id="v-plex">
+    <div id="plexList"></div>
+    <div class="card">
+      <h3>+ CONNECT PLEX SERVER</h3>
+      <div><label>Name (a label you choose)</label><input id="plexName" placeholder="home"></div>
+      <div><label>Server URL</label><input id="plexUrl" placeholder="http://192.168.1.10:32400"></div>
+      <div><label>Plex token</label><input id="plexToken" placeholder="X-Plex-Token value"></div>
+      <div class="help">Get the token: in Plex web, play anything → ⋯ → Get Info → View XML; it's in the URL.</div>
+      <div class="row" style="margin-top:14px"><button onclick="savePlex()">CONNECT</button></div>
+    </div>
+  </div>
+
+  <!-- =========================== TRANSCODE =========================== -->
+  <div class="view" id="v-transcode">
+    <div class="card">
+      <h3>HARDWARE DETECTION</h3>
+      <div class="muted" id="encDetect">Detecting…</div>
+      <div class="row" style="margin-top:10px"><button class="ghost" onclick="loadEncoders()">re-detect</button></div>
+    </div>
+    <div class="card">
+      <h3>ENCODER SETTINGS</h3>
+      <div class="two">
+        <div><label>Encoder</label>
+          <select id="tEncoder">
+            <option value="auto">auto — pick best available</option>
+            <option value="cpu">cpu — software (libx264)</option>
+            <option value="nvenc">nvenc — NVIDIA</option>
+            <option value="qsv">qsv — Intel Quick Sync</option>
+            <option value="vaapi">vaapi — Intel/AMD (Linux)</option>
+            <option value="videotoolbox">videotoolbox — Apple</option>
+          </select></div>
+        <div><label>Device (vaapi only)</label>
+          <input id="tDevice" placeholder="/dev/dri/renderD128"></div>
+      </div>
+      <div class="two">
+        <div><label>Video bitrate</label><input id="tBitrate" placeholder="3500k"></div>
+        <div><label>Preset (optional, backend-specific)</label><input id="tPreset" placeholder="veryfast / p4 …"></div>
+      </div>
+      <div class="two">
+        <div><label>HLS segment length (s)</label><input id="tHls" type="number" placeholder="4"></div>
+        <div><label>Remux compatible files</label>
+          <select id="tCopy"><option value="true">yes — copy h264/aac (less CPU)</option>
+            <option value="false">no — always re-encode</option></select></div>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button onclick="saveTranscode()">APPLY &amp; RESTART ENCODER</button>
+        <span class="muted" id="tNote"></span>
+      </div>
+      <div class="help">Changes take effect immediately for newly tuned channels. If the chosen
+        encoder can't run here, it falls back to CPU and tells you.</div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let STATE = {channels:[], plex_servers:[], transcode:{}};
+let pendingProg = [], pendingAd = [];     // sources being built for new channel
+let editingNum = null;
+
+const $ = s => document.querySelector(s);
+function toast(msg, err){const t=$('#toast');t.textContent=msg;
+  t.className='toast show'+(err?' err':'');setTimeout(()=>t.className='toast',2600);}
+async function api(path, method, body){
+  const opt={method:method||'GET',headers:{'Content-Type':'application/json'}};
+  if(body)opt.body=JSON.stringify(body);
+  const r=await fetch('/api/admin'+path,opt);
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok||j.ok===false)throw new Error(j.error||('HTTP '+r.status));
+  return j;
+}
+
+// tabs
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  $('#v-'+t.dataset.v).classList.add('active');
+  if(t.dataset.v==='transcode')loadEncoders();
+});
+
+// ---------------- load + render ----------------
+async function loadState(){
+  STATE=await api('/state');
+  renderChannels(); renderPlex(); fillTranscodeForm();
+}
+
+function srcLabel(s){
+  return s.type==='plex'
+    ? `plex · ${s.server}:${s.section}`
+    : `local · ${s.dir}`;
+}
+
+function renderChannels(){
+  const list=$('#channelList');
+  if(!STATE.channels.length){list.innerHTML='<div class="card muted">No channels yet. Create one below.</div>';return;}
+  list.innerHTML='';
+  STATE.channels.forEach(ch=>{
+    const card=document.createElement('div');card.className='card';
+    const slots=(ch.slots||[]).map((s,i)=>
+      `<div class="slot"><span>${(s.days||[]).join(',')} · ${s.start} · ${s.show||'ANY'} ${s.block?('· '+s.block+'m'):''}</span>
+        <button class="danger" onclick="delSlot(${ch.number},${i})">remove</button></div>`).join('');
+    const slotAdder = ch.mode==='grid' ? `
+      <label>Add grid slot</label>
+      <div class="row">
+        <input id="sd${ch.number}" placeholder="mon,tue,wed,thu,fri" class="grow">
+        <input id="st${ch.number}" placeholder="18:00" style="max-width:90px">
+        <input id="ss${ch.number}" placeholder="show (optional)" class="grow">
+        <input id="sb${ch.number}" placeholder="min" style="max-width:70px">
+        <button class="ghost" onclick="addSlot(${ch.number})">add</button>
+      </div>` : '';
+    card.innerHTML=`
+      <div class="channel-hd">
+        <div><span class="chnum">${ch.number}</span><b>${ch.name}</b>
+          <span class="tag">${ch.mode}</span>
+          <span class="muted"> ${ch.program_count} programs${ch.commercial_count?(' · '+ch.commercial_count+' ads'):''}</span>
+        </div>
+        <div class="row">
+          <button class="ghost" onclick="editChannel(${ch.number})">edit</button>
+          <button class="ghost" onclick="rescan(${ch.number})">rescan</button>
+          <button class="danger" onclick="delChannel(${ch.number})">delete</button>
+        </div>
+      </div>
+      <div class="muted" style="margin-top:8px">${(ch.program_sources||[]).map(srcLabel).join(' &nbsp;·&nbsp; ')||'no sources'}</div>
+      ${slots?('<div style="margin-top:10px">'+slots+'</div>'):''}
+      ${slotAdder}`;
+    list.appendChild(card);
+  });
+}
+
+function renderPlex(){
+  const list=$('#plexList');
+  if(!STATE.plex_servers.length){list.innerHTML='<div class="card muted">No Plex servers connected.</div>';return;}
+  list.innerHTML='';
+  STATE.plex_servers.forEach(p=>{
+    const card=document.createElement('div');card.className='card';
+    card.innerHTML=`<div class="channel-hd">
+      <div><b>${p.name}</b> <span class="tag plex">PLEX</span><div class="muted">${p.base_url}</div></div>
+      <div class="row">
+        <button class="ghost" onclick="listSections('${p.name}')">list libraries</button>
+        <button class="danger" onclick="delPlex('${p.name}')">disconnect</button>
+      </div></div>
+      <div class="muted" id="sec-${p.name}" style="margin-top:8px"></div>`;
+    list.appendChild(card);
+  });
+}
+
+// ---------------- channel form ----------------
+function addSource(kind){
+  const t=kind==='program'?$('#srcType').value:$('#adType').value;
+  const v=(kind==='program'?$('#srcVal').value:$('#adVal').value).trim();
+  if(!v)return;
+  let src;
+  if(t==='local')src={type:'local',dir:v,kind};
+  else{const [server,...rest]=v.split(':');src={type:'plex',server,section:rest.join(':'),kind};}
+  if(kind==='program'){pendingProg.push(src);$('#srcVal').value='';}
+  else{pendingAd.push(src);$('#adVal').value='';}
+  renderPendingSources();
+}
+function renderPendingSources(){
+  $('#progSources').innerHTML=pendingProg.map((s,i)=>
+    `<div class="src-item"><span>${srcLabel(s)}</span><button class="danger" onclick="rmSource('program',${i})">×</button></div>`).join('');
+  $('#adSources').innerHTML=pendingAd.map((s,i)=>
+    `<div class="src-item"><span>${srcLabel(s)}</span><button class="danger" onclick="rmSource('commercial',${i})">×</button></div>`).join('');
+}
+function rmSource(kind,i){(kind==='program'?pendingProg:pendingAd).splice(i,1);renderPendingSources();}
+
+function resetChannelForm(){
+  editingNum=null;pendingProg=[];pendingAd=[];
+  ['chNum','chName','chBreak','chSoStart','chSoEnd','srcVal','adVal'].forEach(id=>$('#'+id).value='');
+  $('#chMode').value='shuffle';$('#chFormTitle').textContent='+ NEW CHANNEL';$('#chSaveNote').textContent='';
+  renderPendingSources();
+}
+function editChannel(num){
+  const ch=STATE.channels.find(c=>c.number===num);if(!ch)return;
+  editingNum=num;
+  $('#chNum').value=ch.number;$('#chName').value=ch.name;$('#chMode').value=ch.mode;
+  $('#chBreak').value=ch.commercial_break_every?Math.round(ch.commercial_break_every/60):'';
+  $('#chSoStart').value=ch.sign_off_start||'';$('#chSoEnd').value=ch.sign_off_end||'';
+  pendingProg=JSON.parse(JSON.stringify(ch.program_sources||[]));
+  pendingAd=JSON.parse(JSON.stringify(ch.commercial_sources||[]));
+  $('#chFormTitle').textContent='EDIT CHANNEL '+num;
+  renderPendingSources();
+  window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
+}
+async function saveChannel(){
+  const num=parseInt($('#chNum').value);
+  if(isNaN(num)){toast('Channel number required',true);return;}
+  const brkMin=parseFloat($('#chBreak').value)||0;
+  const body={
+    number:num,name:$('#chName').value||('Channel '+num),mode:$('#chMode').value,
+    program_sources:pendingProg,commercial_sources:pendingAd,
+    commercial_break_every:brkMin*60,
+    sign_off_start:$('#chSoStart').value||null,sign_off_end:$('#chSoEnd').value||null,
+  };
+  $('#chSaveNote').textContent='scanning…';
+  try{
+    const r=await api('/channel','POST',body);
+    toast(`Saved CH${num} · ${r.program_count} programs${r.commercial_count?(', '+r.commercial_count+' ads'):''}`);
+    resetChannelForm();await loadState();
+  }catch(e){$('#chSaveNote').textContent='';toast('Save failed: '+e.message,true);}
+}
+async function delChannel(num){
+  if(!confirm('Delete channel '+num+'?'))return;
+  await api('/channel/'+num,'DELETE');toast('Deleted CH'+num);loadState();
+}
+async function rescan(num){
+  try{const r=await api('/channel/'+num+'/rescan','POST');
+    toast(`CH${num} rescanned · ${r.program_count} programs`);loadState();
+  }catch(e){toast('Rescan failed: '+e.message,true);}
+}
+
+// ---------------- slots ----------------
+async function addSlot(num){
+  const days=$('#sd'+num).value, start=$('#st'+num).value,
+        show=$('#ss'+num).value, block=$('#sb'+num).value;
+  if(!days||!start){toast('Days and start time required',true);return;}
+  try{await api('/channel/'+num+'/slot','POST',{days,start,show:show||null,block:block||null});
+    toast('Slot added');loadState();
+  }catch(e){toast('Failed: '+e.message,true);}
+}
+async function delSlot(num,i){await api('/channel/'+num+'/slot/'+i,'DELETE');toast('Slot removed');loadState();}
+
+// ---------------- plex ----------------
+async function savePlex(){
+  const name=$('#plexName').value.trim(),base_url=$('#plexUrl').value.trim(),token=$('#plexToken').value.trim();
+  if(!name||!base_url||!token){toast('All fields required',true);return;}
+  try{await api('/plex','POST',{name,base_url,token});
+    toast('Connected '+name);$('#plexName').value=$('#plexUrl').value=$('#plexToken').value='';loadState();
+  }catch(e){toast('Failed: '+e.message,true);}
+}
+async function delPlex(name){if(!confirm('Disconnect '+name+'?'))return;
+  await api('/plex/'+name,'DELETE');toast('Disconnected');loadState();}
+async function listSections(name){
+  const el=$('#sec-'+name);el.textContent='loading…';
+  try{const r=await api('/plex/'+name+'/sections');
+    el.innerHTML='Libraries: '+r.sections.map(s=>`<span class="tag">${s.title} (${s.type})</span>`).join(' ');
+  }catch(e){el.textContent='Error: '+e.message;}
+}
+
+// ---------------- transcode ----------------
+async function loadEncoders(){
+  const el=$('#encDetect');el.textContent='Detecting…';
+  try{const r=await api('/encoders');
+    const rows=Object.entries(r.available).map(([n,ok])=>
+      `<span class="pill ${ok?'ok':'no'}">${n} ${ok?'✓ works':'— n/a'}</span>`).join(' ');
+    el.innerHTML=`${rows}<div class="help" style="margin-top:8px">auto would pick:
+      <b style="color:var(--accent)">${r.auto_would_pick}</b>.
+      Compiled in ffmpeg: ${r.compiled.join(', ')||'none'}.</div>`;
+  }catch(e){el.textContent='Detection failed: '+e.message;}
+}
+function fillTranscodeForm(){
+  const t=STATE.transcode||{};
+  $('#tEncoder').value=t.encoder||'auto';
+  $('#tDevice').value=t.device||'';
+  $('#tBitrate').value=t.video_bitrate||'';
+  $('#tPreset').value=t.preset||'';
+  $('#tHls').value=t.hls_time||'';
+  $('#tCopy').value=(t.try_copy===false)?'false':'true';
+}
+async function saveTranscode(){
+  const body={
+    encoder:$('#tEncoder').value, device:$('#tDevice').value||null,
+    video_bitrate:$('#tBitrate').value||'3500k', preset:$('#tPreset').value||null,
+    hls_time:parseInt($('#tHls').value)||4, try_copy:$('#tCopy').value==='true',
+  };
+  $('#tNote').textContent='applying…';
+  try{const r=await api('/transcode','POST',body);
+    let msg='Active encoder: '+r.active_encoder;
+    if(r.note)msg+=' ('+r.note+')';
+    $('#tNote').textContent=msg;
+    toast('Transcoding updated · '+r.active_encoder);
+  }catch(e){$('#tNote').textContent='';toast('Failed: '+e.message,true);}
+}
+
+loadState();
+</script>
+</body></html>

@@ -239,10 +239,23 @@ class Channel:
 
 
 class Station:
+    # default transcoding options; overridable via station.json "transcode" block
+    DEFAULT_TRANSCODE = {
+        "encoder": "auto",          # auto | cpu | nvenc | qsv | vaapi | videotoolbox
+        "device": None,             # e.g. /dev/dri/renderD128 for vaapi
+        "video_bitrate": "3500k",
+        "preset": None,             # backend-specific; None = backend default
+        "hls_time": 4,
+        "window": 8,
+        "try_copy": True,           # remux instead of re-encode when h264/aac
+        "verify_encoder": True,     # probe the encoder at startup
+    }
+
     def __init__(self, config_path: str = "station.json"):
         self.config_path = config_path
         self.channels: dict = {}
         self.plex_servers: dict = {}
+        self.transcode: dict = dict(self.DEFAULT_TRANSCODE)
 
     def add_plex_server(self, name: str, base_url: str, token: str):
         self.plex_servers[name] = PlexServer(base_url, token)
@@ -261,7 +274,7 @@ class Station:
         return rows
 
     def save(self):
-        data = {"plex_servers": {}, "channels": []}
+        data = {"transcode": self.transcode, "plex_servers": {}, "channels": []}
         for name, srv in self.plex_servers.items():
             data["plex_servers"][name] = {"base_url": srv.base_url, "token": srv.token}
         for ch in self.channels.values():
@@ -271,6 +284,9 @@ class Station:
 
     def load(self):
         data = json.loads(Path(self.config_path).read_text())
+        # merge persisted transcode settings over defaults
+        self.transcode = dict(self.DEFAULT_TRANSCODE)
+        self.transcode.update(data.get("transcode", {}))
         for name, s in data.get("plex_servers", {}).items():
             self.add_plex_server(name, s["base_url"], s["token"])
         for d in data["channels"]:

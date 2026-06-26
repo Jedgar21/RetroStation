@@ -84,6 +84,20 @@ def main():
 
     sub.add_parser("guide")
     sub.add_parser("list")
+    sub.add_parser("encoders")     # detect available hardware encoders
+
+    p = sub.add_parser("transcode-set")
+    p.add_argument("--encoder", choices=["auto", "cpu", "nvenc", "qsv",
+                                          "vaapi", "videotoolbox"],
+                   help="which H.264 encoder to use")
+    p.add_argument("--device", help="HW device, e.g. /dev/dri/renderD128 (vaapi)")
+    p.add_argument("--bitrate", help="video bitrate, e.g. 3500k or 6000k")
+    p.add_argument("--preset", help="encoder preset (backend-specific)")
+    p.add_argument("--hls-time", type=int, help="HLS segment length in seconds")
+    p.add_argument("--no-copy", action="store_true",
+                   help="always re-encode (don't remux h264/aac sources)")
+    p.add_argument("--no-verify", action="store_true",
+                   help="skip the startup probe of the chosen encoder")
 
     w = sub.add_parser("watch")
     w.add_argument("number", type=int)
@@ -136,6 +150,44 @@ def main():
         station.save()
         print(f"Slot added to CH{args.channel}: {args.days} {args.start} "
               f"{args.show or 'ANY'} ({args.block or 'natural'}m)")
+
+    elif args.cmd == "encoders":
+        from encoders import (available_ffmpeg_encoders, probe_encoder,
+                              resolve_encoder, _AUTO_ORDER)
+        compiled = available_ffmpeg_encoders()
+        print("Compiled H.264 encoders in ffmpeg:",
+              ", ".join(sorted(compiled)) or "(none found)")
+        print("\nRuntime availability (actually tested on this machine):")
+        for n in _AUTO_ORDER:
+            if n == "cpu":
+                print(f"  cpu          always available (software)")
+                continue
+            ok = probe_encoder(n)
+            print(f"  {n:13}{'WORKS' if ok else 'not available'}")
+        picked = resolve_encoder("auto")
+        print(f"\n'auto' would select: {picked.name}")
+
+    elif args.cmd == "transcode-set":
+        t = station.transcode
+        if args.encoder:
+            t["encoder"] = args.encoder
+        if args.device is not None:
+            t["device"] = args.device
+        if args.bitrate:
+            t["video_bitrate"] = args.bitrate
+        if args.preset:
+            t["preset"] = args.preset
+        if args.hls_time:
+            t["hls_time"] = args.hls_time
+        if args.no_copy:
+            t["try_copy"] = False
+        if args.no_verify:
+            t["verify_encoder"] = False
+        station.save()
+        print("Transcode settings:")
+        for k, v in t.items():
+            print(f"  {k:16} {v}")
+        print("\n(restart the server for changes to take effect)")
 
     elif args.cmd == "list":
         for num in sorted(station.channels):

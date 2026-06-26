@@ -42,7 +42,9 @@ class Transcoder:
 
     def __init__(self, work_root: Optional[str] = None,
                  hls_time: int = 4, window: int = 8,
-                 video_bitrate: str = "3500k", try_copy: bool = True):
+                 video_bitrate: str = "3500k", try_copy: bool = True,
+                 encoder: str = "auto", encoder_device: Optional[str] = None,
+                 preset: Optional[str] = None, verify_encoder: bool = True):
         self.root = work_root or tempfile.mkdtemp(prefix="retrostation_hls_")
         self.hls_time = hls_time          # segment length (s)
         self.window = window              # segments kept in the live playlist
@@ -51,6 +53,19 @@ class Transcoder:
         self.sessions: dict[int, ChannelStream] = {}
         self.lock = threading.Lock()
         os.makedirs(self.root, exist_ok=True)
+
+        # Resolve the H.264 encoder backend (hardware-accelerated or cpu).
+        from encoders import resolve_encoder, EncodeProfile
+        self.encoder = resolve_encoder(encoder, device=encoder_device,
+                                       verify=verify_encoder)
+        bitrate_num = int(video_bitrate.rstrip("k") or "3500")
+        self.profile = EncodeProfile(
+            video_bitrate=video_bitrate, maxrate=video_bitrate,
+            bufsize=f"{bitrate_num * 2}k",
+            gop=hls_time * 30, preset=preset)
+        note = getattr(self.encoder, "fallback_note", None)
+        print(f"[transcoder] {note}" if note
+              else f"[transcoder] using encoder: {self.encoder.name}")
 
     # ----------------------------------------------------------------------- #
     def _channel_dir(self, channel: int) -> str:
@@ -63,21 +78,22 @@ class Transcoder:
         playlist = os.path.join(out_dir, "index.m3u8")
         seg = os.path.join(out_dir, "seg_%05d.ts")
 
-        # -ss before -i = fast input seek (keyframe accurate enough for TV).
-        cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-               "-ss", f"{seek:.3f}", "-i", src]
+        cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
 
         if copy_ok:
-            # remux only -- cheapest path when already h264/aac
-            cmd += ["-c", "copy"]
+            # remux only -- cheapest path when already h264/aac, no HW needed.
+            # -ss before -i = fast input seek (keyframe accurate enough for TV).
+            cmd += ["-ss", f"{seek:.3f}", "-i", src, "-c", "copy"]
         else:
-            cmd += [
-                "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main",
-                "-pix_fmt", "yuv420p", "-b:v", self.video_bitrate,
-                "-maxrate", self.video_bitrate, "-bufsize", "7000k",
-                "-g", str(self.hls_time * 30), "-sc_threshold", "0",
-                "-c:a", "aac", "-b:a", "128k", "-ac", "2",
-            ]
+            # Hardware/software encode via the selected backend. Input-side
+            # hwaccel flags must precede -i; the seek stays before -i too.
+            cmd += self.encoder.input_flags()
+            cmd += ["-ss", f"{seek:.3f}", "-i", src]
+            vf = self.encoder.video_filter()
+            if vf:
+                cmd += ["-vf", vf]
+            cmd += self.encoder.video_args(self.profile)
+            cmd += self.encoder.audio_args(self.profile)
 
         cmd += [
             "-f", "hls",
